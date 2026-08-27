@@ -1,0 +1,7 @@
+# Trivy configuration used by the filesystem scan in CI.
+# Helm value overrides belong under misconfiguration.helm.values; the
+# aquasecurity/trivy-action input is named trivy-config.
+misconfiguration:
+  helm:
+    values:
+      - .github/trivy-helm-values.yaml
