@@ -138,6 +138,9 @@ jobs:
       CURRENT_DIGEST: ${{ needs.build-scan-release.outputs.published-digest }}
       KEEP_SEMVER_COUNT: "5"
     steps:
+      - name: Install ORAS
+        uses: oras-project/setup-oras@v1
+
       - name: Prune stale GHCR versions
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -150,6 +153,7 @@ jobs:
 
           owner = os.environ["OWNER"]
           package = os.environ["PACKAGE_NAME"]
+          image = f"{os.environ['REGISTRY']}/{owner}/{package}"
           current_digest = os.environ.get("CURRENT_DIGEST", "")
           keep_semver_count = int(os.environ.get("KEEP_SEMVER_COUNT", "5"))
 
@@ -201,6 +205,24 @@ jobs:
                   keep_ids.add(version["id"])
                   if digest_hex:
                       keep_digests.add(digest_hex)
+
+          for tag in keep_tags:
+              manifest = subprocess.run(["oras", "manifest", "fetch", f"{image}:{tag}"], text=True, capture_output=True)
+              if manifest.returncode != 0:
+                  continue
+              try:
+                  document = json.loads(manifest.stdout)
+              except json.JSONDecodeError:
+                  continue
+              for child in document.get("manifests", []) or []:
+                  child_digest = child.get("digest", "").removeprefix("sha256:")
+                  if child_digest:
+                      keep_digests.add(child_digest)
+
+          for version in versions:
+              digest = version.get("name", "").removeprefix("sha256:")
+              if digest in keep_digests:
+                  keep_ids.add(version["id"])
 
           for version in versions:
               subjects = {match.group(1) for tag in tags(version) if (match := artifact.match(tag))}
