@@ -4,7 +4,7 @@ COPY frontend/package.json frontend/tsconfig.json frontend/vite.config.ts fronte
 COPY frontend/src ./src
 RUN npm install && npm run build
 
-FROM golang:1.23 AS build
+FROM golang:1.25 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
