@@ -1,6 +1,6 @@
 FROM node:22-alpine AS frontend
 WORKDIR /src/frontend
-COPY frontend/package.json frontend/tsconfig.json frontend/vite.config.ts frontend/index.html ./
+COPY frontend/package.json frontend/package-lock.json frontend/tsconfig.json frontend/vite.config.ts frontend/index.html ./
 COPY frontend/src ./src
 RUN npm ci && npm run build
 
