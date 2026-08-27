@@ -1,0 +1,169 @@
+# mariner
+
+mariner is a small S3 file explorer with Go as the backend. Browser requests never receive S3 credentials and all S3 operations are proxied by the server.
+
+The codebase is split into a Go API service under `cmd/mariner` and `internal/` packages, plus a React/TypeScript frontend under `frontend`.
+
+## Run
+
+```sh
+export OIDC_ISSUER=https://idp.example.com/realms/main
+export OIDC_CLIENT_ID=mariner
+export OIDC_CLIENT_SECRET=...
+export OIDC_REDIRECT_URL=http://localhost:8080/auth/callback
+export COOKIE_SECRET=$(openssl rand -hex 32)
+go run ./cmd/mariner
+```
+
+For frontend development, run `cd frontend && npm install && npm run dev`. The production container builds the frontend with Vite and serves it from `/web`.
+
+The OIDC client needs the `openid`, `profile`, and `email` scopes and the callback URL above. `DATA_DIR` defaults to `./data`; it contains the SQLite database `mariner.db`, with encrypted vault envelopes keyed by user. Back it up with appropriate permissions. On first sign-in, choose a master password of at least 10 characters. The server cannot recover it.
+
+Connections support AWS S3, S3-compatible endpoints, static access keys, and the pod/runtime credential chain. In production, put the server behind TLS and set `Secure` on cookies in `main.go` or terminate TLS in a trusted ingress.
+
+## Kubernetes
+
+The Helm chart is in `deploy/helm/mariner`. Build and push the image, then install with OIDC settings:
+
+```sh
+docker build -t ghcr.io/your-org/mariner:latest .
+docker push ghcr.io/your-org/mariner:latest
+
+helm upgrade --install mariner deploy/helm/mariner \
+  --set image.repository=ghcr.io/your-org/mariner \
+  --set oidc.issuer=https://idp.example.com/realms/main \
+  --set oidc.clientId=mariner \
+  --set oidc.clientSecret='...' \
+  --set oidc.redirectUrl=https://mariner.example.com/auth/callback \
+  --set ingress.enabled=true \
+  --set ingress.hosts[0].host=mariner.example.com
+```
+
+For production, use `existingSecret` instead of passing OIDC credentials through Helm values. Configure it as a map with `name`, `clientIdKey`, and `clientSecretKey`; the referenced Secret must also contain `COOKIE_SECRET`:
+
+```yaml
+existingSecret:
+  name: oidc-secret
+  clientIdKey: clientId
+  clientSecretKey: clientSecret
+```
+
+An empty object or an empty `name` makes the chart create its release Secret and use `oidc.clientId`/`oidc.clientSecret`. Keep `replicaCount: 1` while using SQLite and a `ReadWriteOnce` volume.
+
+### Organizations and predefined connections
+
+Mariner supports administrator-defined organizations. An organization is a logical collection of users and shared S3 connections. Membership is derived from the claim configured by `oidc.groupsClaim` in the validated OIDC ID token. It defaults to `groups`, but can be set to claims such as `roles`, `memberOf`, or `organization_groups`:
+
+1. The OIDC provider signs an ID token containing values such as `engineering` or `/platform/engineering` under the configured claim.
+2. Mariner validates the token signature and issuer.
+3. Mariner compares those group values with each organization's `groups` list.
+4. A match grants the user access to that organization's predefined connections.
+
+Matching is exact and case-sensitive. A user only needs one matching group to join an organization. Users can belong to multiple organizations, and connections from all matching organizations are included in their connection list. Use stable organization and connection IDs because changing them changes the generated connection identity.
+
+Organization connections are administrator-managed. Users can browse, upload, delete objects, and create folders according to the permissions of the configured S3 credentials, but they cannot edit or delete the predefined connection from their personal vault. Personal connections remain encrypted per user with the user's master password.
+
+#### Helm values
+
+Configure the organization metadata and connection settings under `organizations`. Both organizations and connections are maps, so their keys are the stable organization and connection names. The optional `id` and `name` fields can override the generated identity or display label. The `credentials` block references a Kubernetes Secret; it does not contain credentials directly:
+
+```yaml
+oidc:
+  issuer: https://idp.example.com/realms/main
+  groupsClaim: groups
+
+organizations:
+  engineering:
+    name: Engineering
+    groups: [engineering, platform]
+    connections:
+      shared-artifacts:
+        name: Shared artifacts
+        bucket: engineering-artifacts
+        region: us-east-1
+        endpoint: https://s3.example.com
+        credentials:
+          secretName: engineering-artifacts-s3
+          accessKeyKey: accessKey
+          secretKeyKey: secretKey
+
+extraObjects:
+  - apiVersion: external-secrets.io/v1beta1
+    kind: ExternalSecret
+    metadata:
+      name: engineering-artifacts-s3
+    spec:
+      refreshInterval: 1h
+      secretStoreRef:
+        name: production
+        kind: ClusterSecretStore
+      target:
+        name: engineering-artifacts-s3
+      data:
+        - secretKey: accessKey
+          remoteRef:
+            key: s3/engineering/access-key
+        - secretKey: secretKey
+          remoteRef:
+            key: s3/engineering/secret-key
+```
+
+The chart emits organization metadata in `MARINER_ORGANIZATIONS_JSON`. For every connection credential reference it also creates two backend-only environment variables using this naming scheme:
+
+```text
+MARINER_ORG_<ORG_ID>_CONN_<CONNECTION_ID>_ACCESS_KEY
+MARINER_ORG_<ORG_ID>_CONN_<CONNECTION_ID>_SECRET_KEY
+```
+
+Hyphens are converted to underscores and names are uppercased. The application uses these variables to resolve the Secret values at startup. The values are never included in `MARINER_ORGANIZATIONS_JSON`, ConfigMap output, API responses, or browser state.
+
+The Secret must exist in the Mariner release namespace and contain the keys named by `accessKeyKey` and `secretKeyKey` (default names are `accessKey` and `secretKey`). If an ExternalSecret creates the Secret, install or sync it before starting Mariner. Secret rotation requires the pod to restart because credentials are loaded from environment variables at process startup.
+
+#### Security and resources
+
+The chart is configured for the Kubernetes Pod Security Admission `restricted` profile. The distroless image runs as non-root, drops Linux capabilities, disables privilege escalation, uses the `RuntimeDefault` seccomp profile, and has a read-only root filesystem. Application writes are limited to `/data` and `/tmp`. Adjust CPU and memory sizing with `resources.requests` and `resources.limits`:
+
+```yaml
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+```
+
+#### Keycloak group claim setup
+
+For Keycloak, add a client-scoped **Groups Membership** protocol mapper to the Mariner client:
+
+- Token claim name: the value of `oidc.groupsClaim` (default: `groups`)
+- Add to ID token: enabled
+- Add to access token: enabled if downstream APIs need it
+- Add to userinfo: optional
+- Full group path: choose consistently with the values in Helm
+
+Assign users to the matching Keycloak groups, then sign out and sign back in to obtain a fresh ID token. The default OIDC scopes remain `openid profile email`; the mapper adds the configured claim as a claim in the ID token.
+
+#### Example install
+
+```sh
+helm upgrade --install mariner deploy/helm/mariner \
+  --namespace mariner --create-namespace \
+  -f values-production.yaml
+```
+
+Before installing, verify that each `credentials.secretName` will be created in the `mariner` namespace:
+
+```sh
+kubectl -n mariner get secret engineering-artifacts-s3
+kubectl -n mariner rollout restart deployment/mariner-mariner
+```
+
+To troubleshoot membership, inspect the decoded ID token in a controlled development environment and confirm the exact values under the configured claim, then compare them with the rendered Helm configuration:
+
+```sh
+helm template mariner deploy/helm/mariner -f values-production.yaml
+```
+
+Do not log, render, or commit Secret data. Helm values may safely contain organization metadata and Secret names, but must never contain raw S3 access keys or secret keys.

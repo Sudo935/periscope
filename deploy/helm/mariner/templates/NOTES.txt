@@ -1,0 +1,9 @@
+mariner has been installed.
+
+Configure the OIDC client callback URL as:
+  {{ (index .Values.ingress.hosts 0).host }}/auth/callback
+
+If ingress is disabled, reach the service with:
+  kubectl port-forward svc/{{ include "mariner.fullname" . }} 8080:{{ .Values.service.port }}
+
+The SQLite vault is persisted in the {{ include "mariner.fullname" . }} PVC.

@@ -1,0 +1,184 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mariner.fullname" . }}
+  labels:
+    {{- include "mariner.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "mariner.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mariner.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "mariner.serviceAccountName" . }}
+      {{- with .Values.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if or .Values.caBundle.secretName .Values.caBundle.configMapName }}
+      initContainers:
+        - name: ca-bundle
+          image: {{ .Values.caBundle.initImage | quote }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -ec
+            - >-
+              cp /etc/ssl/certs/ca-certificates.crt /work/ca-certificates.crt
+              && printf '\n' >> /work/ca-certificates.crt
+              && if [ -d /etc/mariner-ca/secret ]; then cat /etc/mariner-ca/secret/* >> /work/ca-certificates.crt; fi
+              && if [ -d /etc/mariner-ca/configmap ]; then cat /etc/mariner-ca/configmap/* >> /work/ca-certificates.crt; fi
+              && echo "assembled CA certificates: $(grep -c 'BEGIN CERTIFICATE' /work/ca-certificates.crt)"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: ca-bundle
+              mountPath: /work
+            {{- if .Values.caBundle.secretName }}
+            - name: ca-input-secret
+              mountPath: /etc/mariner-ca/secret
+              readOnly: true
+            {{- end }}
+            {{- if .Values.caBundle.configMapName }}
+            - name: ca-input-configmap
+              mountPath: /etc/mariner-ca/configmap
+              readOnly: true
+            {{- end }}
+      {{- end }}
+      containers:
+        - name: mariner
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "mariner.fullname" . }}
+          env:
+            - name: ADDR
+              value: ":8080"
+            - name: DATA_DIR
+              value: /data
+            - name: COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mariner.secretName" . }}
+                  key: COOKIE_SECRET
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mariner.secretName" . }}
+                  key: {{ if .Values.existingSecret.name }}{{ required "existingSecret.clientSecretKey is required" .Values.existingSecret.clientSecretKey }}{{ else }}OIDC_CLIENT_SECRET{{ end }}
+            - name: OIDC_CLIENT_ID
+              {{- if .Values.existingSecret.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mariner.secretName" . }}
+                  key: {{ required "existingSecret.clientIdKey is required" .Values.existingSecret.clientIdKey }}
+              {{- else }}
+              value: {{ required "oidc.clientId is required when existingSecret.name is empty" .Values.oidc.clientId | quote }}
+              {{- end }}
+            {{- range $organizationName, $configuredOrg := .Values.organizations }}
+            {{- $orgKey := upper (replace "-" "_" (default $organizationName $configuredOrg.id)) }}
+            {{- range $connectionName, $configured := $configuredOrg.connections }}
+            {{- $connKey := upper (replace "-" "_" (default $connectionName $configured.id)) }}
+            {{- with $configured.credentials }}
+            - name: MARINER_ORG_{{ $orgKey }}_CONN_{{ $connKey }}_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "organization connection credentials.secretName is required" .secretName }}
+                  key: {{ default "accessKey" .accessKeyKey }}
+            - name: MARINER_ORG_{{ $orgKey }}_CONN_{{ $connKey }}_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "organization connection credentials.secretName is required" .secretName }}
+                  key: {{ default "secretKey" .secretKeyKey }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if or .Values.caBundle.secretName .Values.caBundle.configMapName }}
+            - name: SSL_CERT_FILE
+              value: /etc/mariner-ca-bundle/ca-certificates.crt
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /api/me
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/me
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+            {{- if or .Values.caBundle.secretName .Values.caBundle.configMapName }}
+            - name: ca-bundle
+              mountPath: /etc/mariner-ca-bundle
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "mariner.fullname" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+        {{- if or .Values.caBundle.secretName .Values.caBundle.configMapName }}
+        {{- if .Values.caBundle.secretName }}
+        - name: ca-input-secret
+          secret:
+            secretName: {{ .Values.caBundle.secretName }}
+        {{- end }}
+        {{- if .Values.caBundle.configMapName }}
+        - name: ca-input-configmap
+          configMap:
+            name: {{ .Values.caBundle.configMapName }}
+        {{- end }}
+        - name: ca-bundle
+          emptyDir: {}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

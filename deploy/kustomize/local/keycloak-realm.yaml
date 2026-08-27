@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-realm
+data:
+  mariner-realm.json: |
+    {
+      "realm": "mariner",
+      "enabled": true,
+      "registrationAllowed": false,
+      "clients": [{
+        "clientId": "mariner",
+        "enabled": true,
+        "publicClient": false,
+        "secret": "MarinerClientSecret123!",
+        "redirectUris": ["https://mariner.127.0.0.1.sslip.io/auth/callback"],
+        "webOrigins": ["https://mariner.127.0.0.1.sslip.io"],
+        "standardFlowEnabled": true,
+        "protocol": "openid-connect"
+      }],
+      "users": [{
+        "username": "demo",
+        "enabled": true,
+        "email": "demo@example.com",
+        "firstName": "Demo",
+        "lastName": "User",
+        "credentials": [{"type": "password", "value": "DemoPassword123!", "temporary": false}]
+      }]
+    }

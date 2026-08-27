@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mariner.fullname" . }}
+  labels:
+    {{- include "mariner.labels" . | nindent 4 }}
+data:
+  OIDC_ISSUER: {{ required "oidc.issuer is required" .Values.oidc.issuer | quote }}
+  OIDC_CLIENT_ID: {{ default "" .Values.oidc.clientId | quote }}
+  OIDC_REDIRECT_URL: {{ required "oidc.redirectUrl is required" .Values.oidc.redirectUrl | quote }}
+  OIDC_GROUPS_CLAIM: {{ default "groups" .Values.oidc.groupsClaim | quote }}
+  OIDC_AUDIENCE_CLAIM: {{ default "aud" .Values.oidc.audienceClaim | quote }}
+  OIDC_AUDIENCE: {{ default .Values.oidc.clientId .Values.oidc.audience | quote }}
+  OIDC_NAME_CLAIM: {{ default "name" .Values.oidc.nameClaim | quote }}
+  OIDC_DEBUG_JWT: {{ default false .Values.oidc.debugJwt | quote }}
+  {{- $organizations := dict }}
+  {{- range $organizationName, $configuredOrg := .Values.organizations }}
+  {{- $org := $configuredOrg }}
+  {{- $connections := dict }}
+  {{- range $connectionName, $configured := $org.connections }}
+  {{- $connection := dict "id" (default $connectionName $configured.id) "name" (default $connectionName $configured.name) "bucket" $configured.bucket "region" (default "us-east-1" $configured.region) "prefix" (default "" $configured.prefix) "endpoint" (default "" $configured.endpoint) }}
+  {{- $orgKey := upper (replace "-" "_" (default $organizationName $org.id)) }}
+  {{- $connKey := upper (replace "-" "_" (default $connectionName $configured.id)) }}
+  {{- $_ := set $connection "accessKeyEnv" (printf "MARINER_ORG_%s_CONN_%s_ACCESS_KEY" $orgKey $connKey) }}
+  {{- $_ := set $connection "secretKeyEnv" (printf "MARINER_ORG_%s_CONN_%s_SECRET_KEY" $orgKey $connKey) }}
+  {{- $_ := set $connections $connectionName $connection }}
+  {{- end }}
+  {{- $organization := dict "id" (default $organizationName $org.id) "name" (default $organizationName $org.name) "groups" (default (list (default $organizationName $org.id)) $org.groups) "connections" $connections }}
+  {{- $_ := set $organizations $organizationName $organization }}
+  {{- end }}
+  MARINER_ORGANIZATIONS_JSON: {{ $organizations | toJson | quote }}

@@ -1,0 +1,62 @@
+# Local ORG1 smoke-test values. Credentials are deliberately supplied through
+# native Kubernetes Secrets by scripts/deploy-org1-test.sh; replace these
+# values with ExternalSecrets for any shared or production environment.
+image:
+  repository: localhost/mariner
+  tag: local
+  pullPolicy: Never
+
+oidc:
+  issuer: https://keycloak.127.0.0.1.sslip.io/realms/mariner
+  clientId: mariner
+  clientSecret: MarinerClientSecret123!
+  redirectUrl: https://mariner.127.0.0.1.sslip.io/auth/callback
+  groupsClaim: groups
+  caSecret: sslip-io-ca
+
+ingress:
+  enabled: true
+  className: traefik
+  hosts:
+    - host: mariner.127.0.0.1.sslip.io
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: sslip-io-tls
+      hosts:
+        - mariner.127.0.0.1.sslip.io
+
+organizations:
+  ORG1:
+    name: Organization 1
+    groups:
+      - ORG1
+    connections:
+      bucket-one:
+        name: Bucket One
+        bucket: org1-bucket-one
+        region: us-east-1
+        endpoint: http://minio.infra.svc.cluster.local:9000
+        credentials:
+          secretName: org1-bucket-one-s3
+          accessKeyKey: accessKey
+          secretKeyKey: secretKey
+      bucket-two:
+        name: Bucket Two
+        bucket: org1-bucket-two
+        region: us-east-1
+        endpoint: http://minio.infra.svc.cluster.local:9000
+        credentials:
+          secretName: org1-bucket-two-s3
+          accessKeyKey: accessKey
+          secretKeyKey: secretKey
+      bucket-three:
+        name: Bucket Three
+        bucket: org1-bucket-three
+        region: us-east-1
+        endpoint: http://minio.infra.svc.cluster.local:9000
+        credentials:
+          secretName: org1-bucket-three-s3
+          accessKeyKey: accessKey
+          secretKeyKey: secretKey

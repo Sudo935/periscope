@@ -1,0 +1,47 @@
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-bootstrap
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: sslip-io-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: mariner-local-ca
+  secretName: sslip-io-ca
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  issuerRef:
+    name: selfsigned-bootstrap
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: sslip-io-ca
+spec:
+  ca:
+    secretName: sslip-io-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: sslip-io-tls
+  namespace: infra
+spec:
+  secretName: sslip-io-tls
+  dnsNames:
+    - mariner.127.0.0.1.sslip.io
+    - keycloak.127.0.0.1.sslip.io
+    - minio.127.0.0.1.sslip.io
+  issuerRef:
+    name: sslip-io-ca
+    kind: ClusterIssuer
+    group: cert-manager.io

@@ -1,0 +1,18 @@
+FROM node:22-alpine AS frontend
+WORKDIR /src/frontend
+COPY frontend/package.json frontend/tsconfig.json frontend/vite.config.ts frontend/index.html ./
+COPY frontend/src ./src
+RUN npm install && npm run build
+
+FROM golang:1.23 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/mariner ./cmd/mariner
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/mariner /mariner
+COPY --from=frontend /src/frontend/dist /web
+EXPOSE 8080
+ENTRYPOINT ["/mariner"]

@@ -1,0 +1,151 @@
+replicaCount: 1
+image:
+  repository: ghcr.io/example/mariner
+  tag: latest
+  pullPolicy: IfNotPresent
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+service:
+  type: ClusterIP
+  port: 8080
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: mariner.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: sslip-io-tls
+      hosts:
+        - mariner.127.0.0.1.sslip.io
+oidc:
+  issuer: ""
+  clientId: ""
+  clientSecret: ""
+  redirectUrl: ""
+  # Name of the JWT claim containing organization group values. The claim can
+  # be an array of strings or a single string. Defaults to `groups`.
+  groupsClaim: groups
+  # Audience validation defaults to the standard `aud` claim and clientId.
+  # Set both for providers that use a different audience claim, such as ADFS.
+  audienceClaim: aud
+  audience: ""
+  # JWT claim used for the signed-in display name. Falls back to email and
+  # preferred_username when the claim is absent.
+  nameClaim: name
+  # WARNING: logs the complete ID token and decoded claims. Development only.
+  debugJwt: false
+caBundle:
+  # Optional Secret and/or ConfigMap containing one or more PEM CA files.
+  # Filenames and keys are not significant; every regular file is appended to
+  # the image's system CA bundle, so public roots remain trusted as well.
+  # This global bundle is used for OIDC and S3 TLS.
+  secretName: ""
+  configMapName: ""
+  # The init container assembles the system bundle plus all supplied CA files.
+  # It is configured to satisfy the Kubernetes PSA restricted profile.
+  initImage: alpine:3.20
+existingSecret:
+  # When set, this existing Secret supplies OIDC credentials and COOKIE_SECRET.
+  # The client ID and secret keys are independently configurable.
+  name: ""
+  clientIdKey: clientId
+  clientSecretKey: clientSecret
+cookieSecret: ""
+# Organizations are selected from the OIDC ID token claim configured by
+# `oidc.groupsClaim` (which defaults to `groups`).
+# A user is granted an organization when at least one token group matches at
+# least one entry in that organization's groups list. Organizations and their
+# connections are maps keyed by their stable names. Organization
+# connections are predefined by the administrator and are visible to matching
+# users alongside their personal vault connections.
+#
+# Credentials must come from a Kubernetes Secret. Do not put access keys or
+# secret keys in this file. The chart creates secretKeyRef environment entries
+# and the application resolves the generated environment variable names at
+# startup. The referenced Secret may be created by an ExternalSecret supplied
+# through extraObjects below.
+#
+# Example:
+# organizations:
+#   engineering:
+#     name: Engineering
+#     groups:
+#       - engineering
+#       - platform
+#     connections:
+#       shared-artifacts:
+#         bucket: engineering-artifacts
+#         region: us-east-1
+#         endpoint: https://s3.example.com
+#         prefix: shared/
+#         credentials:
+#           secretName: engineering-artifacts-s3
+#           accessKeyKey: accessKey
+#           secretKeyKey: secretKey
+organizations: {}
+
+# Additional Kubernetes objects rendered after the Mariner resources. This is
+# intentionally generic so ExternalSecret, SecretStore, NetworkPolicy, or
+# other platform resources can be installed with the same Helm release.
+# Objects are rendered as supplied; set metadata.namespace explicitly when
+# the object should not use the Helm release namespace.
+#
+# Example ExternalSecret:
+# extraObjects:
+#   - apiVersion: external-secrets.io/v1beta1
+#     kind: ExternalSecret
+#     metadata:
+#       name: engineering-artifacts-s3
+#     spec:
+#       refreshInterval: 1h
+#       secretStoreRef:
+#         name: production
+#         kind: ClusterSecretStore
+#       target:
+#         name: engineering-artifacts-s3
+#       data:
+#         - secretKey: accessKey
+#           remoteRef:
+#             key: s3/engineering/access-key
+#         - secretKey: secretKey
+#           remoteRef:
+#             key: s3/engineering/secret-key
+extraObjects: []
+persistence:
+  enabled: true
+  storageClass: ""
+  accessModes: [ReadWriteOnce]
+  size: 1Gi
+  annotations: {}
+# Container requests and limits are configurable per environment. These
+# conservative defaults keep the chart schedulable in a local kind cluster.
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+hostAliases: []
+podSecurityContext:
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
