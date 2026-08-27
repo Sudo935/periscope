@@ -54,6 +54,7 @@ export function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [unlockOpen, setUnlockOpen] = useState(false);
+  const [vaultExists, setVaultExists] = useState<boolean>();
   const [connectionModalOpen, setConnectionModalOpen] = useState(false);
   const [editingConnection, setEditingConnection] = useState<Connection>();
   const [darkMode, setDarkMode] = useState(false);
@@ -71,7 +72,14 @@ export function App() {
     if (user && !user.authenticated) window.location.assign("/auth/login");
   }, [user]);
   useEffect(() => {
-    if (user?.authenticated) setUnlockOpen(true);
+    if (!user?.authenticated) return;
+    api
+      .status()
+      .then(({ exists }) => {
+        setVaultExists(exists);
+        setUnlockOpen(true);
+      })
+      .catch((err) => setError(errorMessage(err)));
   }, [user]);
 
   async function browse(
@@ -198,6 +206,7 @@ export function App() {
         <UnlockModal
           onDestroy={async () => {
             await api.destroyVault();
+            setVaultExists(false);
             setConnections([]);
             setActiveConnection(undefined);
             setPrefix("");
@@ -206,6 +215,7 @@ export function App() {
           onUnlock={async (password) => {
             try {
               setConnections(await api.unlock(password));
+              setVaultExists(true);
               setDarkMode((await api.settings()).theme === "dark");
               setUnlockOpen(false);
             } catch (err) {
@@ -213,6 +223,7 @@ export function App() {
               throw err;
             }
           }}
+          initialSetup={vaultExists === false}
         />
       )}
       {connectionModalOpen && (
@@ -429,45 +440,91 @@ function Workspace({
 function UnlockModal({
   onUnlock,
   onDestroy,
+  initialSetup,
 }: {
   onUnlock: (password: string) => Promise<void>;
   onDestroy: () => Promise<void>;
+  initialSetup: boolean;
 }) {
   const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
   const [visible, setVisible] = useState(false);
   const [confirmDestroy, setConfirmDestroy] = useState(false);
+  const [validationError, setValidationError] = useState("");
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (password) await onUnlock(password);
+    if (!password) return;
+    if (initialSetup && password !== confirmation) {
+      setValidationError("The master passwords do not match.");
+      return;
+    }
+    setValidationError("");
+    await onUnlock(password);
   }
   return (
     <div className="modal-backdrop">
       <form className="card unlock" onSubmit={submit}>
-        <h2>Unlock your vault</h2>
-        <p>Enter your master password to access your encrypted connections.</p>
-        <div className="password-field">
-          <input
-            autoFocus
-            type={visible ? "text" : "password"}
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            placeholder="Master password"
-            minLength={10}
-            required
-          />
-          <button
-            type="button"
-            className="icon password-toggle"
-            aria-label={visible ? "Hide password" : "Show password"}
-            onClick={() => setVisible((value) => !value)}
-          >
-            {visible ? <EyeOff size={18} /> : <Eye size={18} />}
-          </button>
-        </div>
+        <span className="eyebrow">
+          {initialSetup ? "FIRST-TIME SETUP" : "PRIVATE VAULT"}
+        </span>
+        <h2>{initialSetup ? "Create your vault" : "Unlock your vault"}</h2>
+        <p>
+          {initialSetup
+            ? "Choose a master password to create your encrypted vault. It protects the S3 connections saved by your account, and Mariner cannot recover it."
+            : "Enter your master password to decrypt and access your saved S3 connections."}
+        </p>
+        {initialSetup && (
+          <p className="unlock-note">
+            Use at least 10 characters. You’ll use this password each time you
+            unlock your vault.
+          </p>
+        )}
+        <label className="unlock-label">
+          {initialSetup ? "Master password" : "Enter master password"}
+          <div className="password-field">
+            <input
+              autoFocus
+              type={visible ? "text" : "password"}
+              value={password}
+              onChange={(event) => {
+                setPassword(event.target.value);
+                setValidationError("");
+              }}
+              placeholder="Master password"
+              minLength={10}
+              required
+            />
+            <button
+              type="button"
+              className="icon password-toggle"
+              aria-label={visible ? "Hide password" : "Show password"}
+              onClick={() => setVisible((value) => !value)}
+            >
+              {visible ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
+          </div>
+        </label>
+        {initialSetup && (
+          <label className="unlock-label">
+            Retype master password
+            <input
+              type={visible ? "text" : "password"}
+              value={confirmation}
+              onChange={(event) => {
+                setConfirmation(event.target.value);
+                setValidationError("");
+              }}
+              placeholder="Retype master password"
+              minLength={10}
+              required
+            />
+          </label>
+        )}
+        {validationError && <p className="form-error">{validationError}</p>}
         <button className="button" type="submit">
-          Unlock vault
+          {initialSetup ? "Create encrypted vault" : "Unlock vault"}
         </button>
-        {!confirmDestroy ? (
+        {!initialSetup && !confirmDestroy ? (
           <button
             type="button"
             className="forgot-password"

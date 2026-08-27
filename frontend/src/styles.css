@@ -7,6 +7,7 @@
   --green: #176b4b;
   --line: #d9e0d9;
   --muted: #68736b;
+  --surface-muted: #f3f5f1;
 }
 :root[data-theme="dark"] {
   color: #e8f0e9;
@@ -16,6 +17,7 @@
   --green: #53a978;
   --line: #304239;
   --muted: #a5b5aa;
+  --surface-muted: #203229;
 }
 html[data-theme="dark"] .content {
   background: #101a15;
@@ -379,6 +381,40 @@ html[data-theme="dark"] .download-options button:focus-visible {
 .unlock p {
   color: var(--muted);
   margin: 0 0 20px;
+}
+.unlock-note {
+  background: var(--surface-muted);
+  border-left: 3px solid var(--green);
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  margin-top: -8px !important;
+  padding: 10px 12px;
+}
+.unlock-label {
+  color: #315640;
+  display: grid;
+  font-size: 13px;
+  font-weight: 700;
+  gap: 7px;
+  margin-top: 14px;
+}
+.unlock-label > input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+  padding: 11px 12px;
+  width: 100%;
+}
+.unlock-label > input:focus {
+  border-color: var(--green);
+  outline: 3px solid #176b4b22;
+}
+.form-error {
+  color: #a43e32 !important;
+  font-size: 13px;
+  font-weight: 700;
+  margin: 12px 0 -4px !important;
 }
 .unlock .button {
   width: 100%;
