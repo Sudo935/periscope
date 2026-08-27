@@ -8,15 +8,24 @@ MINIO_ENDPOINT="http://minio.infra.svc.cluster.local:9000"
 
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 for bucket in one two three; do
+  case "$bucket" in
+    one) access_key=org1one-access; secret_key=Org1BucketOne123! ;;
+    two) access_key=org1two-access; secret_key=Org1BucketTwo123! ;;
+    three) access_key=org1three-access; secret_key=Org1BucketThree123! ;;
+  esac
   kubectl -n "$NAMESPACE" create secret generic "org1-bucket-${bucket}-s3" \
-    --from-literal=accessKey=minioadmin \
-    --from-literal=secretKey=MinioAdmin123! \
+    --from-literal=accessKey="$access_key" \
+    --from-literal=secretKey="$secret_key" \
     --dry-run=client -o yaml | kubectl apply -f -
 done
+kubectl -n "$NAMESPACE" create secret generic mariner-bucket-s3 \
+  --from-literal=accessKey=mariner-access \
+  --from-literal=secretKey=MarinerBucket123! \
+  --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl -n "$MINIO_NAMESPACE" run minio-org1-bootstrap --rm -i --restart=Never \
   --image=quay.io/minio/mc:latest --command -- sh -c \
-  'mc alias set local "$0" minioadmin MinioAdmin123! >/dev/null && for bucket in org1-bucket-one org1-bucket-two org1-bucket-three; do mc mb --ignore-existing "local/$bucket"; done' \
+  'mc alias set local "$0" minioadmin MinioAdmin123! >/dev/null && for spec in "mariner:mariner-access:MarinerBucket123!" "org1-bucket-one:org1one-access:Org1BucketOne123!" "org1-bucket-two:org1two-access:Org1BucketTwo123!" "org1-bucket-three:org1three-access:Org1BucketThree123!"; do bucket="${spec%%:*}"; rest="${spec#*:}"; access="${rest%%:*}"; secret="${rest#*:}"; mc mb --ignore-existing "local/$bucket"; printf "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"s3:ListBucket\"],\"Resource\":\"arn:aws:s3:::%s\"},{\"Effect\":\"Allow\",\"Action\":[\"s3:*\"],\"Resource\":\"arn:aws:s3:::%s/*\"}]}" "$bucket" "$bucket" >/tmp/$bucket-policy.json; mc admin policy info local "$bucket-policy" >/dev/null 2>&1 || mc admin policy create local "$bucket-policy" /tmp/$bucket-policy.json; mc admin user info local "$access" >/dev/null 2>&1 || mc admin user add local "$access" "$secret"; mc admin policy attach local "$bucket-policy" --user "$access"; done' \
   "$MINIO_ENDPOINT"
 
 # Keycloak realm/client/user/group configuration is idempotent. Use the admin
@@ -29,17 +38,13 @@ KC_TOKEN="$(curl -ksSf -X POST "$KC_BASE/realms/master/protocol/openid-connect/t
 test -n "$KC_TOKEN"
 KC_AUTH=(-H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json')
 
-client_id="$(curl -ksSf "${KC_AUTH[@]}" "$KC_BASE/admin/realms/mariner/clients?clientId=mariner" \
-  | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
-user_id="$(curl -ksSf "${KC_AUTH[@]}" "$KC_BASE/admin/realms/mariner/users?username=demo" \
-  | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
-group_id="$(curl -ksSf "${KC_AUTH[@]}" "$KC_BASE/admin/realms/mariner/groups?search=ORG1" \
-  | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+client_id="$(curl -ksSf "${KC_AUTH[@]}" "$KC_BASE/admin/realms/mariner/clients?clientId=mariner" | grep -o '"id":"[^"]*"' | head -n1 | cut -d'"' -f4)"
+user_id="$(curl -ksSf "${KC_AUTH[@]}" "$KC_BASE/admin/realms/mariner/users?username=demo" | grep -o '"id":"[^"]*"' | head -n1 | cut -d'"' -f4)"
+group_id="$(curl -ksSf "${KC_AUTH[@]}" "$KC_BASE/admin/realms/mariner/groups?search=ORG1" | grep -o '"id":"[^"]*"' | head -n1 | cut -d'"' -f4)"
 if [ -z "$group_id" ]; then
   curl -ksSf -X POST "${KC_AUTH[@]}" "$KC_BASE/admin/realms/mariner/groups" \
     -d '{"name":"ORG1"}' >/dev/null
-  group_id="$(curl -ksSf "${KC_AUTH[@]}" "$KC_BASE/admin/realms/mariner/groups?search=ORG1" \
-    | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+  group_id="$(curl -ksSf "${KC_AUTH[@]}" "$KC_BASE/admin/realms/mariner/groups?search=ORG1" | grep -o '"id":"[^"]*"' | head -n1 | cut -d'"' -f4)"
 fi
 curl -ksSf -X PUT "${KC_AUTH[@]}" \
   "$KC_BASE/admin/realms/mariner/users/$user_id/groups/$group_id" >/dev/null
@@ -57,4 +62,5 @@ helm upgrade --install mariner "$ROOT_DIR/deploy/helm/mariner" \
   -f "$ROOT_DIR/deploy/helm/mariner/values-local-org1.yaml" \
   --set "hostAliases[0].ip=$TRAEFIK_IP" \
   --set 'hostAliases[0].hostnames[0]=keycloak.127.0.0.1.sslip.io' \
+  --server-side=false \
   --wait --timeout 10m

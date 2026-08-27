@@ -2,6 +2,8 @@
   font-family: Inter, system-ui, sans-serif;
   color: #17211b;
   background: #f3f5f1;
+  --panel: #fff;
+  --text: #17211b;
   --green: #176b4b;
   --line: #d9e0d9;
   --muted: #68736b;
@@ -9,6 +11,8 @@
 :root[data-theme="dark"] {
   color: #e8f0e9;
   background: #101a15;
+  --panel: #17251d;
+  --text: #e8f0e9;
   --green: #53a978;
   --line: #304239;
   --muted: #a5b5aa;
@@ -217,7 +221,49 @@ html[data-theme="dark"] .sign-out:hover { background: #263a2d; color: #79c796; }
   min-width: 120px;
   white-space: nowrap;
 }
-.download-select { appearance: auto; font: inherit; }
+.download-menu {
+  flex: 0 0 120px;
+  min-width: 120px;
+  position: relative;
+}
+.download-trigger {
+  width: 100%;
+}
+.download-options {
+  background: var(--panel, #fff);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 10px 24px #183b1b22;
+  display: grid;
+  gap: 3px;
+  left: 0;
+  padding: 5px;
+  position: absolute;
+  top: calc(100% + 6px);
+  width: 150px;
+  z-index: 20;
+}
+.download-options button {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text, #315640);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 9px 10px;
+  text-align: left;
+}
+.download-options button:hover,
+.download-options button:focus-visible {
+  background: #edf2ed;
+  outline: 0;
+}
+html[data-theme="dark"] .download-options { background: #17251d; }
+html[data-theme="dark"] .download-options button { color: #d8ebdc; }
+html[data-theme="dark"] .download-options button:hover,
+html[data-theme="dark"] .download-options button:focus-visible { background: #263a2d; }
 .drop-hint {
   border: 1px dashed var(--line);
   border-radius: 8px;
@@ -374,12 +420,12 @@ html[data-theme="dark"] .sign-out:hover { background: #263a2d; color: #79c796; }
   cursor: not-allowed;
 }
 .activity-tray { bottom: 24px; display: grid; gap: 12px; max-width: 360px; position: fixed; right: 24px; width: calc(100% - 48px); z-index: 5; }
-.activity-tray { background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 28px #183b1b18; overflow: hidden; }
-.activity-header { align-items: center; color: #315640; display: flex; justify-content: space-between; padding: 12px 14px; }
+.activity-tray { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 28px #183b1b18; color: var(--text); overflow: hidden; }
+.activity-header { align-items: center; color: var(--text); display: flex; justify-content: space-between; padding: 12px 14px; }
 .activity-header button { background: transparent; border: 0; color: var(--green); cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; }
 .activity-list { max-height: 330px; overflow-y: auto; padding: 0 10px 10px; }
 .activity { border-top: 1px solid var(--line); padding: 12px 4px; }
-.activity-top { align-items: center; display: flex; font-size: 13px; gap: 8px; justify-content: space-between; }
+.activity-top { align-items: center; display: flex; color: var(--text); font-size: 13px; font-weight: 600; gap: 8px; justify-content: space-between; }
 .activity-top span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-progress { background: #e7eee8; border-radius: 99px; height: 6px; margin: 9px 0 6px; overflow: hidden; }
 .activity-progress span { background: var(--green); border-radius: inherit; display: block; height: 100%; transition: width 180ms ease; }
@@ -393,7 +439,6 @@ html[data-theme="dark"] .sign-out:hover { background: #263a2d; color: #79c796; }
 .loading-state p { margin: 0; }
 .spin { animation: spin 900ms linear infinite; color: var(--green); }
 @keyframes spin { to { transform: rotate(360deg); } }
-html[data-theme="dark"] .activity-tray > strong, html[data-theme="dark"] .activity { background: #17251d; color: #e8f0e9; }
 html[data-theme="dark"] .activity-progress { background: #304239; }
 .password-field {
   position: relative;

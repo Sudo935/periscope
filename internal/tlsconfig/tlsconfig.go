@@ -2,6 +2,8 @@ package tlsconfig
 
 import (
 	"crypto/x509"
+	"encoding/pem"
+	"log"
 	"os"
 )
 
@@ -22,5 +24,17 @@ func RootCAs() (*x509.CertPool, error) {
 	if !pool.AppendCertsFromPEM(data) {
 		return nil, os.ErrInvalid
 	}
+	certs := 0
+	for rest := data; len(rest) > 0; {
+		block, remaining := pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		rest = remaining
+		if block.Type == "CERTIFICATE" {
+			certs++
+		}
+	}
+	log.Printf("tls: appended %d certificates from %s", certs, file)
 	return pool, nil
 }

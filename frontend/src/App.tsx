@@ -2,6 +2,8 @@ import { FormEvent, useEffect, useState } from "react";
 import {
   AlertTriangle,
   Check,
+  ChevronDown,
+  Download,
   Eye,
   EyeOff,
   File,
@@ -578,35 +580,41 @@ function Explorer({
     setDeleteSelectionOpen(true);
   }
   async function confirmDeleteSelected() {
-    try {
-      for (const key of selected) {
-        const item = items.find((candidate) => candidate.key === key);
-        const id = `${Date.now()}-${key}`;
-        setActivities((current) => [...current, { id, label: item?.name || key, kind: "delete", progress: 35, state: "active" }]);
-        try { await api.deleteFile(connection.id, key); setActivities((current) => current.map((activity) => activity.id === id ? { ...activity, progress: 100, state: "done" } : activity)); }
-        catch (err) { setActivities((current) => current.map((activity) => activity.id === id ? { ...activity, state: "error", error: errorMessage(err) } : activity)); }
+    const pending = Array.from(selected).map((key, index) => {
+      const item = items.find((candidate) => candidate.key === key);
+      return { key, id: `${Date.now()}-${index}-${key}`, label: item?.name || key };
+    });
+    setActivities((current) => [
+      ...current,
+      ...pending.map(({ id, label }) => ({ id, label, kind: "delete" as const, progress: 0, state: "active" as const })),
+    ]);
+    await Promise.all(pending.map(async ({ key, id }) => {
+      try {
+        await api.deleteFile(connection.id, key);
+        setActivities((current) => current.map((activity) => activity.id === id ? { ...activity, progress: 100, state: "done" } : activity));
+      } catch (err) {
+        setActivities((current) => current.map((activity) => activity.id === id ? { ...activity, state: "error", error: errorMessage(err) } : activity));
       }
-      setSelected(new Set()); onRefresh();
-    }
-    catch (err) { onError(errorMessage(err)); }
+    }));
+    setSelected(new Set());
+    onRefresh();
   }
 
   async function uploadFiles(files: FileList | File[]) {
-    try {
-      for (const file of Array.from(files)) {
-        const id = `${Date.now()}-${file.name}`;
-        setActivities((current) => [...current, { id, label: file.name, kind: "upload", progress: 0, state: "active" }]);
-        try {
-          await api.upload(connection.id, prefix, file, (progress) => setActivities((current) => current.map((item) => item.id === id ? { ...item, progress } : item)));
-          setActivities((current) => current.map((item) => item.id === id ? { ...item, progress: 100, state: "done" } : item));
-        } catch (err) {
-          setActivities((current) => current.map((item) => item.id === id ? { ...item, state: "error", error: errorMessage(err) } : item));
-        }
+    const pending = Array.from(files).map((file, index) => ({ file, id: `${Date.now()}-${index}-${file.name}` }));
+    setActivities((current) => [
+      ...current,
+      ...pending.map(({ file, id }) => ({ id, label: file.name, kind: "upload" as const, progress: 0, state: "active" as const })),
+    ]);
+    await Promise.all(pending.map(async ({ file, id }) => {
+      try {
+        await api.upload(connection.id, prefix, file, (progress) => setActivities((current) => current.map((item) => item.id === id ? { ...item, progress } : item)));
+        setActivities((current) => current.map((item) => item.id === id ? { ...item, progress: 100, state: "done" } : item));
+      } catch (err) {
+        setActivities((current) => current.map((item) => item.id === id ? { ...item, state: "error", error: errorMessage(err) } : item));
       }
-      onRefresh();
-    } catch (err) {
-      onError(errorMessage(err));
-    }
+    }));
+    onRefresh();
   }
 
   async function upload(event: React.ChangeEvent<HTMLInputElement>) {
@@ -640,9 +648,7 @@ function Explorer({
         <button className="secondary" onClick={() => setFolderOpen(true)}>
           <FolderPlus size={16} /> New folder
         </button>
-        <select className="secondary download-select" defaultValue="" onChange={(event) => { if (event.target.value) { downloadArchive(event.target.value as "zip" | "tgz"); event.target.value = ""; } }} aria-label="Download archive">
-          <option value="" disabled>Download</option><option value="zip">Download ZIP</option><option value="tgz">Download TGZ</option>
-        </select>
+        <DownloadMenu onDownload={downloadArchive} />
         <button className="secondary" onClick={selected.size === items.length ? () => setSelected(new Set()) : selectAll}>
           {selected.size === items.length ? "Unselect all" : "Select all"}
         </button>
@@ -687,13 +693,42 @@ function Explorer({
       {deleteTarget && <DeleteFileModal item={deleteTarget} onCancel={() => setDeleteTarget(undefined)} onConfirm={async () => {
         const id = `${Date.now()}-${deleteTarget.key}`;
         setDeleteTarget(undefined);
-        setActivities((current) => [...current, { id, label: deleteTarget.name, kind: "delete", progress: 35, state: "active" }]);
+        setActivities((current) => [...current, { id, label: deleteTarget.name, kind: "delete", progress: 0, state: "active" }]);
         try { await api.deleteFile(connection.id, deleteTarget.key); setActivities((current) => current.map((item) => item.id === id ? { ...item, progress: 100, state: "done" } : item)); onRefresh(); }
         catch (err) { setActivities((current) => current.map((item) => item.id === id ? { ...item, state: "error", error: errorMessage(err) } : item)); }
       }} />}
       {deleteSelectionOpen && <DeleteFileModal count={selected.size} onCancel={() => setDeleteSelectionOpen(false)} onConfirm={async () => { setDeleteSelectionOpen(false); await confirmDeleteSelected(); }} />}
       <ActivityTray activities={activities} onDismiss={(id) => setActivities((current) => current.filter((item) => item.id !== id))} />
     </section>
+  );
+}
+
+function DownloadMenu({ onDownload }: { onDownload: (format: "zip" | "tgz") => void }) {
+  const [open, setOpen] = useState(false);
+  function choose(format: "zip" | "tgz") {
+    setOpen(false);
+    onDownload(format);
+  }
+  return (
+    <div className="download-menu">
+      <button
+        type="button"
+        className="secondary download-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <Download size={16} />
+        <span>Download</span>
+        <ChevronDown size={15} />
+      </button>
+      {open && (
+        <div className="download-options" role="menu">
+          <button type="button" role="menuitem" onClick={() => choose("zip")}>Download ZIP</button>
+          <button type="button" role="menuitem" onClick={() => choose("tgz")}>Download TGZ</button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -766,7 +801,7 @@ function ActivityTray({ activities, onDismiss }: { activities: Activity[]; onDis
   if (!activities.length) return null;
   return <div className={`activity-tray ${minimized ? "minimized" : ""}`}><div className="activity-header"><strong>Activity</strong><button onClick={() => setMinimized((value) => !value)}>{minimized ? "Show" : "Minimize"}</button></div>{!minimized && <div className="activity-list">{activities.map((activity) => <div className="activity" key={activity.id}>
     <div className="activity-top"><span>{activity.kind === "upload" ? "Uploading" : activity.kind === "delete" ? "Deleting" : "Downloading"} {activity.label}</span>{activity.state !== "active" && <button className="activity-dismiss" onClick={() => onDismiss(activity.id)}>×</button>}</div>
-    <div className="activity-progress"><span className={`${activity.state} ${activity.kind === "delete" && activity.state === "active" ? "indeterminate" : ""}`} style={{ width: `${activity.progress}%` }} /></div>
+    <div className="activity-progress"><span className={`${activity.state} ${activity.kind !== "upload" && activity.state === "active" ? "indeterminate" : ""}`} style={{ width: `${activity.progress}%` }} /></div>
     <small>{activity.state === "active" ? (activity.kind === "upload" ? `${activity.progress}%` : "Working…") : activity.state === "done" ? <><Check size={13} /> Complete</> : activity.error || "Failed"}</small>
   </div>)}</div>}</div>;
 }

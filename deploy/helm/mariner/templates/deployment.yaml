@@ -36,9 +36,8 @@ spec:
             - >-
               cp /etc/ssl/certs/ca-certificates.crt /work/ca-certificates.crt
               && printf '\n' >> /work/ca-certificates.crt
-              && if [ -d /etc/mariner-ca/secret ]; then cat /etc/mariner-ca/secret/* >> /work/ca-certificates.crt; fi
-              && if [ -d /etc/mariner-ca/configmap ]; then cat /etc/mariner-ca/configmap/* >> /work/ca-certificates.crt; fi
-              && echo "assembled CA certificates: $(grep -c 'BEGIN CERTIFICATE' /work/ca-certificates.crt)"
+              && if [ -d /etc/mariner-ca/secret ]; then for file in /etc/mariner-ca/secret/*; do cat "$file" >> /work/ca-certificates.crt; printf '\n' >> /work/ca-certificates.crt; done; fi
+              && if [ -d /etc/mariner-ca/configmap ]; then for file in /etc/mariner-ca/configmap/*; do cat "$file" >> /work/ca-certificates.crt; printf '\n' >> /work/ca-certificates.crt; done; fi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
