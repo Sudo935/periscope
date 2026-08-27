@@ -12,59 +12,20 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-scan-release:
+  validate:
+    name: Validate source and chart
     runs-on: ubuntu-latest
-    outputs:
-      published-digest: ${{ steps.image.outputs.digest }}
     permissions:
       contents: read
-      packages: write
-      security-events: write
-      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
       - name: Set up Helm
         uses: azure/setup-helm@v4
 
-      - name: Extract image metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=quarantine-${{ github.sha }}
-
-      - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install cosign
-        if: github.event_name != 'pull_request'
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-
-      - name: Build and publish quarantine image
-        id: image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Lint chart
+        run: helm lint deploy/helm/mariner
 
       - name: Scan source and chart
         uses: aquasecurity/trivy-action@v0.36.0
@@ -78,6 +39,51 @@ jobs:
           ignore-unfixed: true
           exit-code: 1
 
+  build-quarantine:
+    name: Build and scan quarantine image
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: type=raw,value=quarantine-${{ github.sha }}
+
+      - name: Build and publish quarantine image
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Scan quarantine image
         if: github.event_name != 'pull_request'
         uses: aquasecurity/trivy-action@v0.36.0
@@ -87,18 +93,48 @@ jobs:
           ignore-unfixed: true
           exit-code: 1
 
+  publish-release:
+    name: Sign, promote, and publish chart
+    runs-on: ubuntu-latest
+    needs: [validate, build-quarantine]
+    if: github.event_name != 'pull_request'
+    outputs:
+      published-digest: ${{ needs.build-quarantine.outputs.digest }}
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
       - name: Sign quarantine image
-        if: github.event_name != 'pull_request'
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          DIGEST: ${{ steps.image.outputs.digest }}
+          DIGEST: ${{ needs.build-quarantine.outputs.digest }}
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
       - name: Promote image digest
-        if: github.event_name != 'pull_request'
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          DIGEST: ${{ steps.image.outputs.digest }}
+          DIGEST: ${{ needs.build-quarantine.outputs.digest }}
           REF: ${{ github.ref }}
           REF_NAME: ${{ github.ref_name }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -117,9 +153,6 @@ jobs:
           fi
           docker buildx imagetools create --tag "${IMAGE}:${target_tag}" "${IMAGE}@${DIGEST}"
 
-      - name: Lint chart
-        run: helm lint deploy/helm/mariner
-
       - name: Package and publish chart
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -133,7 +166,7 @@ jobs:
   prune-registry:
     name: Prune GHCR images and signatures
     runs-on: ubuntu-latest
-    needs: build-scan-release
+    needs: publish-release
     if: github.event_name != 'pull_request'
     permissions:
       packages: write
@@ -141,7 +174,7 @@ jobs:
       REGISTRY: ghcr.io
       OWNER: ${{ github.repository_owner }}
       PACKAGE_NAME: ${{ github.event.repository.name }}
-      CURRENT_DIGEST: ${{ needs.build-scan-release.outputs.published-digest }}
+      CURRENT_DIGEST: ${{ needs.publish-release.outputs.published-digest }}
       KEEP_SEMVER_COUNT: "5"
     steps:
       - name: Install ORAS
@@ -245,4 +278,76 @@ jobs:
               deleted += 1
 
           print(f"Kept {len(keep_ids)} GHCR versions; deleted {deleted} stale versions")
+          PY
+
+  prune-charts:
+    name: Prune GHCR Helm chart versions
+    runs-on: ubuntu-latest
+    needs: publish-release
+    if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/')
+    permissions:
+      packages: write
+    env:
+      OWNER: ${{ github.repository_owner }}
+      PACKAGE_NAME: ${{ github.event.repository.name }}
+      KEEP_SEMVER_COUNT: "5"
+    steps:
+      - name: Prune stale chart versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from urllib.parse import quote
+
+          owner = os.environ["OWNER"]
+          package = quote(f"charts/{os.environ['PACKAGE_NAME']}", safe="")
+          keep_count = int(os.environ.get("KEEP_SEMVER_COUNT", "5"))
+
+          def gh(path, method="GET"):
+              command = ["gh", "api", "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28"]
+              if method != "GET":
+                  command.extend(["-X", method])
+              command.append(path)
+              return subprocess.run(command, text=True, capture_output=True)
+
+          org = gh(f"/orgs/{owner}")
+          prefix = f"/orgs/{owner}" if org.returncode == 0 else f"/users/{owner}"
+          base = f"{prefix}/packages/container/{package}/versions"
+          versions = []
+          page = 1
+          while True:
+              result = gh(f"{base}?per_page=100&page={page}")
+              result.check_returncode()
+              batch = json.loads(result.stdout)
+              if not batch:
+                  break
+              versions.extend(batch)
+              page += 1
+
+          semver = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+
+          def tags(version):
+              return set(version.get("metadata", {}).get("container", {}).get("tags", []) or [])
+
+          keep_tags = {
+              tag
+              for tag in sorted(
+                  {tag for version in versions for tag in tags(version) if semver.match(tag)},
+                  reverse=True,
+              )[:keep_count]
+          }
+          keep_ids = {version["id"] for version in versions if tags(version) & keep_tags}
+          deleted = 0
+          for version in versions:
+              if version["id"] in keep_ids:
+                  continue
+              result = gh(f"{base}/{version['id']}", method="DELETE")
+              if result.returncode != 0:
+                  raise RuntimeError(result.stderr or result.stdout)
+              deleted += 1
+          print(f"Kept chart tags: {', '.join(sorted(keep_tags, reverse=True)) or '<none>'}; deleted {deleted} stale chart versions")
           PY
