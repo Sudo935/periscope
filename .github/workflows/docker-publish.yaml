@@ -50,6 +50,15 @@ jobs:
         working-directory: frontend
         run: npm ci && npm audit --audit-level=high
 
+      - name: Scan Go packages
+        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          cache-dependency-path: go.sum
+          repo-checkout: false
+          go-package: ./...
+
   build-quarantine:
     name: Build and scan quarantine image
     runs-on: ubuntu-latest
