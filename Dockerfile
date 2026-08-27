@@ -15,4 +15,5 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/mariner /mariner
 COPY --from=frontend /src/frontend/dist /web
 EXPOSE 8080
+USER 65532:65532
 ENTRYPOINT ["/mariner"]
