@@ -72,7 +72,8 @@ jobs:
           scan-type: fs
           scan-ref: .
           scanners: vuln,misconfig,secret
-          trivy-args: --skip-dirs deploy/kustomize/local --helm-set-string oidc.clientId=scan --helm-set-string oidc.issuer=https://oidc.invalid/realms/scan --helm-set-string oidc.redirectUrl=https://mariner.invalid/auth/callback
+          skip-dirs: deploy/kustomize/local
+          helm-values: .github/trivy-helm-values.yaml
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: 1

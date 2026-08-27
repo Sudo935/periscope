@@ -1,0 +1,5 @@
+# Non-secret values used only to render the chart during CI scanning.
+oidc:
+  clientId: scan
+  issuer: https://oidc.invalid/realms/scan
+  redirectUrl: https://mariner.invalid/auth/callback
