@@ -18,7 +18,7 @@ import {
   Upload,
   Sun,
 } from "lucide-react";
-import { api, Connection, Item } from "./api";
+import { api, BrowseKind, Connection, Item } from "./api";
 
 type User = { authenticated: boolean; name?: string };
 type ErrorHandler = (message: string) => void;
@@ -32,7 +32,14 @@ type ConnectionForm = {
   accessKey: string;
   secretKey: string;
 };
-type Activity = { id: string; label: string; kind: "upload" | "delete" | "download"; progress: number; state: "active" | "done" | "error"; error?: string };
+type Activity = {
+  id: string;
+  label: string;
+  kind: "upload" | "delete" | "download";
+  progress: number;
+  state: "active" | "done" | "error";
+  error?: string;
+};
 
 export function App() {
   const [user, setUser] = useState<User>();
@@ -40,13 +47,19 @@ export function App() {
   const [activeConnection, setActiveConnection] = useState<Connection>();
   const [prefix, setPrefix] = useState("");
   const [items, setItems] = useState<Item[]>([]);
+  const [itemFilter, setItemFilter] = useState<BrowseKind>("all");
+  const [nextToken, setNextToken] = useState("");
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [unlockOpen, setUnlockOpen] = useState(false);
   const [connectionModalOpen, setConnectionModalOpen] = useState(false);
   const [editingConnection, setEditingConnection] = useState<Connection>();
   const [darkMode, setDarkMode] = useState(false);
-  useEffect(() => { document.documentElement.dataset.theme = darkMode ? "dark" : "light"; }, [darkMode]);
+  useEffect(() => {
+    document.documentElement.dataset.theme = darkMode ? "dark" : "light";
+  }, [darkMode]);
 
   useEffect(() => {
     api
@@ -61,15 +74,43 @@ export function App() {
     if (user?.authenticated) setUnlockOpen(true);
   }, [user]);
 
-  async function browse(connection: Connection, nextPrefix = "") {
+  async function browse(
+    connection: Connection,
+    nextPrefix = "",
+    kind = itemFilter,
+  ) {
     setActiveConnection(connection);
     setPrefix(nextPrefix);
     setLoading(true);
     try {
-      setItems((await api.browse(connection.id, nextPrefix)).items);
+      const result = await api.browse(connection.id, nextPrefix, kind);
+      setItems(result.items);
+      setNextToken(result.nextToken ?? "");
+      setHasMore(result.hasMore);
     } catch (err) {
       setError(errorMessage(err));
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
+  }
+  async function loadMore() {
+    if (!activeConnection || !hasMore || loading) return;
+    setLoadingMore(true);
+    try {
+      const result = await api.browse(
+        activeConnection.id,
+        prefix,
+        itemFilter,
+        nextToken,
+      );
+      setItems((current) => [...current, ...result.items]);
+      setNextToken(result.nextToken ?? "");
+      setHasMore(result.hasMore);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setLoadingMore(false);
+    }
   }
 
   async function addConnection(value: ConnectionForm) {
@@ -92,9 +133,13 @@ export function App() {
       const nextConnections = await api.connections();
       setConnections(nextConnections);
       setEditingConnection(undefined);
-      const saved = nextConnections.find((connection) => connection.id === value.id);
+      const saved = nextConnections.find(
+        (connection) => connection.id === value.id,
+      );
       if (saved) await browse(saved, prefix);
-    } catch (err) { setError(errorMessage(err)); }
+    } catch (err) {
+      setError(errorMessage(err));
+    }
   }
   async function deleteConnection(connection: Connection) {
     if (!window.confirm(`Delete “${connection.name}”?`)) return;
@@ -103,13 +148,18 @@ export function App() {
       const nextConnections = await api.connections();
       setConnections(nextConnections);
       if (activeConnection?.id === connection.id) {
-        setActiveConnection(undefined); setItems([]); setPrefix("");
+        setActiveConnection(undefined);
+        setItems([]);
+        setPrefix("");
       }
-    } catch (err) { setError(errorMessage(err)); }
+    } catch (err) {
+      setError(errorMessage(err));
+    }
   }
 
   if (!user) return <main className="center">Loading…</main>;
-  if (!user.authenticated) return <main className="center">Redirecting to sign in…</main>;
+  if (!user.authenticated)
+    return <main className="center">Redirecting to sign in…</main>;
   return (
     <div className="layout">
       <Sidebar
@@ -121,7 +171,11 @@ export function App() {
         onEditConnection={setEditingConnection}
         onDeleteConnection={deleteConnection}
         darkMode={darkMode}
-        onToggleTheme={async () => { const theme = darkMode ? "light" : "dark"; setDarkMode(theme === "dark"); await api.updateSettings({ theme }); }}
+        onToggleTheme={async () => {
+          const theme = darkMode ? "light" : "dark";
+          setDarkMode(theme === "dark");
+          await api.updateSettings({ theme });
+        }}
       />
       <Workspace
         connection={activeConnection}
@@ -131,6 +185,14 @@ export function App() {
         onBrowse={browse}
         onRefresh={() => activeConnection && browse(activeConnection, prefix)}
         onError={setError}
+        hasMore={hasMore}
+        onLoadMore={loadMore}
+        loadingMore={loadingMore}
+        itemFilter={itemFilter}
+        onFilterChange={(kind) => {
+          setItemFilter(kind);
+          if (activeConnection) browse(activeConnection, prefix, kind);
+        }}
       />
       {unlockOpen && (
         <UnlockModal
@@ -238,8 +300,40 @@ function Sidebar({
           </span>
           {!connection.id.includes(":") && (
             <span className="connection-actions">
-              <span role="button" tabIndex={0} aria-label={`Edit ${connection.name}`} onClick={(event) => { event.stopPropagation(); onEditConnection(connection); }} onKeyDown={(event) => { if (event.key === "Enter") { event.stopPropagation(); onEditConnection(connection); } }}><Pencil size={14} /></span>
-              <span role="button" tabIndex={0} aria-label={`Delete ${connection.name}`} onClick={(event) => { event.stopPropagation(); onDeleteConnection(connection); }} onKeyDown={(event) => { if (event.key === "Enter") { event.stopPropagation(); onDeleteConnection(connection); } }}><Trash2 size={14} /></span>
+              <span
+                role="button"
+                tabIndex={0}
+                aria-label={`Edit ${connection.name}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onEditConnection(connection);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.stopPropagation();
+                    onEditConnection(connection);
+                  }
+                }}
+              >
+                <Pencil size={14} />
+              </span>
+              <span
+                role="button"
+                tabIndex={0}
+                aria-label={`Delete ${connection.name}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onDeleteConnection(connection);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.stopPropagation();
+                    onDeleteConnection(connection);
+                  }
+                }}
+              >
+                <Trash2 size={14} />
+              </span>
             </span>
           )}
         </button>
@@ -269,6 +363,11 @@ function Workspace({
   onBrowse,
   onRefresh,
   onError,
+  hasMore,
+  onLoadMore,
+  loadingMore,
+  itemFilter,
+  onFilterChange,
 }: {
   connection?: Connection;
   loading: boolean;
@@ -277,6 +376,11 @@ function Workspace({
   onBrowse: (connection: Connection, prefix?: string) => void;
   onRefresh: () => void;
   onError: ErrorHandler;
+  hasMore: boolean;
+  onLoadMore: () => Promise<void>;
+  loadingMore: boolean;
+  itemFilter: BrowseKind;
+  onFilterChange: (kind: BrowseKind) => void;
 }) {
   return (
     <main className="content">
@@ -285,13 +389,31 @@ function Workspace({
           <span className="eyebrow">BUCKET EXPLORER</span>
           <h1>{connection?.name ?? "Your workspace"}</h1>
         </div>
-        <a className="sign-out" href="/auth/logout">Sign out</a>
+        <a className="sign-out" href="/auth/logout">
+          Sign out
+        </a>
       </header>
       {connection ? (
         loading ? (
-          <section className="card loading-state"><LoaderCircle className="spin" size={28} /><strong>Loading bucket contents</strong><p>Connecting to {connection.bucket}…</p></section>
+          <section className="card loading-state">
+            <LoaderCircle className="spin" size={28} />
+            <strong>Loading bucket contents</strong>
+            <p>Connecting to {connection.bucket}…</p>
+          </section>
         ) : (
-          <Explorer connection={connection} prefix={prefix} items={items} onBrowse={onBrowse} onRefresh={onRefresh} onError={onError} />
+          <Explorer
+            connection={connection}
+            prefix={prefix}
+            items={items}
+            onBrowse={onBrowse}
+            onRefresh={onRefresh}
+            onError={onError}
+            hasMore={hasMore}
+            onLoadMore={onLoadMore}
+            loadingMore={loadingMore}
+            itemFilter={itemFilter}
+            onFilterChange={onFilterChange}
+          />
         )
       ) : (
         <section className="card empty">
@@ -437,8 +559,12 @@ function ConnectionModal({
       <form className="card connection-modal" onSubmit={submit}>
         <div className="modal-heading">
           <div>
-            <span className="eyebrow">{connection ? "EDIT CONNECTION" : "NEW CONNECTION"}</span>
-            <h2>{connection ? "Edit S3 connection" : "Add an S3 connection"}</h2>
+            <span className="eyebrow">
+              {connection ? "EDIT CONNECTION" : "NEW CONNECTION"}
+            </span>
+            <h2>
+              {connection ? "Edit S3 connection" : "Add an S3 connection"}
+            </h2>
           </div>
           <button
             type="button"
@@ -450,7 +576,9 @@ function ConnectionModal({
           </button>
         </div>
         <p className="modal-description">
-          {connection ? "Update the connection details. Leave credentials blank to keep the current values." : "Connection credentials are encrypted in your personal vault."}
+          {connection
+            ? "Update the connection details. Leave credentials blank to keep the current values."
+            : "Connection credentials are encrypted in your personal vault."}
         </p>
         <div className="form-grid">
           <label>
@@ -519,8 +647,17 @@ function ConnectionModal({
           <button type="button" className="secondary" onClick={onCancel}>
             Cancel
           </button>
-          <button type="button" className="secondary" onClick={test} disabled={testing || !form.bucket || !form.name}>
-            {testing ? "Testing…" : tested ? "Connection tested" : "Test connection"}
+          <button
+            type="button"
+            className="secondary"
+            onClick={test}
+            disabled={testing || !form.bucket || !form.name}
+          >
+            {testing
+              ? "Testing…"
+              : tested
+                ? "Connection tested"
+                : "Test connection"}
           </button>
           <button type="submit" className="button" disabled={!tested}>
             {connection ? "Save changes" : "Save connection"}
@@ -539,6 +676,11 @@ function Explorer({
   onBrowse,
   onRefresh,
   onError,
+  hasMore,
+  onLoadMore,
+  loadingMore,
+  itemFilter,
+  onFilterChange,
 }: {
   connection: Connection;
   prefix: string;
@@ -546,35 +688,82 @@ function Explorer({
   onBrowse: (connection: Connection, prefix?: string) => void;
   onRefresh: () => void;
   onError: ErrorHandler;
+  hasMore: boolean;
+  onLoadMore: () => Promise<void>;
+  loadingMore: boolean;
+  itemFilter: BrowseKind;
+  onFilterChange: (kind: BrowseKind) => void;
 }) {
   const [folderOpen, setFolderOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<Item>();
   const [deleteSelectionOpen, setDeleteSelectionOpen] = useState(false);
+  const visibleItems = items;
   async function downloadArchive(format: "zip" | "tgz") {
-    const id = `${Date.now()}-${format}`; const label = `${connection.bucket}${prefix ? `/${prefix}` : ""}.${format}`;
-    setActivities((current) => [...current, { id, label, kind: "download", progress: 35, state: "active" }]);
-    try { const blob = await api.download(connection.id, prefix, format); const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = label; link.click(); URL.revokeObjectURL(url); setActivities((current) => current.map((item) => item.id === id ? { ...item, progress: 100, state: "done" } : item)); }
-    catch (err) { setActivities((current) => current.map((item) => item.id === id ? { ...item, state: "error", error: errorMessage(err) } : item)); }
+    const id = `${Date.now()}-${format}`;
+    const label = `${connection.bucket}${prefix ? `/${prefix}` : ""}.${format}`;
+    setActivities((current) => [
+      ...current,
+      { id, label, kind: "download", progress: 35, state: "active" },
+    ]);
+    try {
+      const blob = await api.download(connection.id, prefix, format);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = label;
+      link.click();
+      URL.revokeObjectURL(url);
+      setActivities((current) =>
+        current.map((item) =>
+          item.id === id ? { ...item, progress: 100, state: "done" } : item,
+        ),
+      );
+    } catch (err) {
+      setActivities((current) =>
+        current.map((item) =>
+          item.id === id
+            ? { ...item, state: "error", error: errorMessage(err) }
+            : item,
+        ),
+      );
+    }
   }
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectionAnchor, setSelectionAnchor] = useState<string>();
 
   function toggleSelected(key: string) {
     setSelectionAnchor(key);
-    setSelected((current) => { const next = new Set(current); next.has(key) ? next.delete(key) : next.add(key); return next; });
+    setSelected((current) => {
+      const next = new Set(current);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
   }
   function selectFromRow(key: string, event: React.MouseEvent) {
     if (!event.ctrlKey && !event.metaKey && !event.shiftKey) return false;
     if (event.shiftKey && selectionAnchor) {
-      const keys = items.map((item) => item.key);
-      const start = keys.indexOf(selectionAnchor), end = keys.indexOf(key);
-      if (start >= 0 && end >= 0) setSelected((current) => new Set([...current, ...keys.slice(Math.min(start, end), Math.max(start, end) + 1)]));
+      const keys = visibleItems.map((item) => item.key);
+      const start = keys.indexOf(selectionAnchor),
+        end = keys.indexOf(key);
+      if (start >= 0 && end >= 0)
+        setSelected(
+          (current) =>
+            new Set([
+              ...current,
+              ...keys.slice(Math.min(start, end), Math.max(start, end) + 1),
+            ]),
+        );
     } else toggleSelected(key);
     return true;
   }
-  function selectAll() { setSelected(new Set(items.map((item) => item.key))); }
+  function selectAll() {
+    setSelected(
+      (current) =>
+        new Set([...current, ...visibleItems.map((item) => item.key)]),
+    );
+  }
   async function deleteSelected() {
     if (!selected.size) return;
     setDeleteSelectionOpen(true);
@@ -582,38 +771,89 @@ function Explorer({
   async function confirmDeleteSelected() {
     const pending = Array.from(selected).map((key, index) => {
       const item = items.find((candidate) => candidate.key === key);
-      return { key, id: `${Date.now()}-${index}-${key}`, label: item?.name || key };
+      return {
+        key,
+        id: `${Date.now()}-${index}-${key}`,
+        label: item?.name || key,
+      };
     });
     setActivities((current) => [
       ...current,
-      ...pending.map(({ id, label }) => ({ id, label, kind: "delete" as const, progress: 0, state: "active" as const })),
+      ...pending.map(({ id, label }) => ({
+        id,
+        label,
+        kind: "delete" as const,
+        progress: 0,
+        state: "active" as const,
+      })),
     ]);
-    await Promise.all(pending.map(async ({ key, id }) => {
-      try {
-        await api.deleteFile(connection.id, key);
-        setActivities((current) => current.map((activity) => activity.id === id ? { ...activity, progress: 100, state: "done" } : activity));
-      } catch (err) {
-        setActivities((current) => current.map((activity) => activity.id === id ? { ...activity, state: "error", error: errorMessage(err) } : activity));
-      }
-    }));
+    await Promise.all(
+      pending.map(async ({ key, id }) => {
+        try {
+          await api.deleteFile(connection.id, key);
+          setActivities((current) =>
+            current.map((activity) =>
+              activity.id === id
+                ? { ...activity, progress: 100, state: "done" }
+                : activity,
+            ),
+          );
+        } catch (err) {
+          setActivities((current) =>
+            current.map((activity) =>
+              activity.id === id
+                ? { ...activity, state: "error", error: errorMessage(err) }
+                : activity,
+            ),
+          );
+        }
+      }),
+    );
     setSelected(new Set());
     onRefresh();
   }
 
   async function uploadFiles(files: FileList | File[]) {
-    const pending = Array.from(files).map((file, index) => ({ file, id: `${Date.now()}-${index}-${file.name}` }));
+    const pending = Array.from(files).map((file, index) => ({
+      file,
+      id: `${Date.now()}-${index}-${file.name}`,
+    }));
     setActivities((current) => [
       ...current,
-      ...pending.map(({ file, id }) => ({ id, label: file.name, kind: "upload" as const, progress: 0, state: "active" as const })),
+      ...pending.map(({ file, id }) => ({
+        id,
+        label: file.name,
+        kind: "upload" as const,
+        progress: 0,
+        state: "active" as const,
+      })),
     ]);
-    await Promise.all(pending.map(async ({ file, id }) => {
-      try {
-        await api.upload(connection.id, prefix, file, (progress) => setActivities((current) => current.map((item) => item.id === id ? { ...item, progress } : item)));
-        setActivities((current) => current.map((item) => item.id === id ? { ...item, progress: 100, state: "done" } : item));
-      } catch (err) {
-        setActivities((current) => current.map((item) => item.id === id ? { ...item, state: "error", error: errorMessage(err) } : item));
-      }
-    }));
+    await Promise.all(
+      pending.map(async ({ file, id }) => {
+        try {
+          await api.upload(connection.id, prefix, file, (progress) =>
+            setActivities((current) =>
+              current.map((item) =>
+                item.id === id ? { ...item, progress } : item,
+              ),
+            ),
+          );
+          setActivities((current) =>
+            current.map((item) =>
+              item.id === id ? { ...item, progress: 100, state: "done" } : item,
+            ),
+          );
+        } catch (err) {
+          setActivities((current) =>
+            current.map((item) =>
+              item.id === id
+                ? { ...item, state: "error", error: errorMessage(err) }
+                : item,
+            ),
+          );
+        }
+      }),
+    );
     onRefresh();
   }
 
@@ -649,11 +889,36 @@ function Explorer({
           <FolderPlus size={16} /> New folder
         </button>
         <DownloadMenu onDownload={downloadArchive} />
-        <button className="secondary" onClick={selected.size === items.length ? () => setSelected(new Set()) : selectAll}>
-          {selected.size === items.length ? "Unselect all" : "Select all"}
+        <button
+          className="secondary"
+          onClick={
+            visibleItems.length > 0 &&
+            visibleItems.every((item) => selected.has(item.key))
+              ? () =>
+                  setSelected(
+                    (current) =>
+                      new Set(
+                        [...current].filter(
+                          (key) =>
+                            !visibleItems.some((item) => item.key === key),
+                        ),
+                      ),
+                  )
+              : selectAll
+          }
+        >
+          {visibleItems.length > 0 &&
+          visibleItems.every((item) => selected.has(item.key))
+            ? "Unselect all"
+            : "Select all"}
         </button>
-        <button className="danger compact" disabled={!selected.size} onClick={deleteSelected}>
-          <Trash2 size={15} /> Delete{selected.size ? ` (${selected.size})` : ""}
+        <button
+          className="danger compact"
+          disabled={!selected.size}
+          onClick={deleteSelected}
+        >
+          <Trash2 size={15} /> Delete
+          {selected.size ? ` (${selected.size})` : ""}
         </button>
       </div>
       <div className="drop-hint">
@@ -666,7 +931,25 @@ function Explorer({
         <span>Size</span>
         <span />
       </div>
-      {items.map((item) => (
+      <div className="item-filter" aria-label="Filter bucket contents">
+        {(
+          [
+            ["all", "All"],
+            ["file", "Files"],
+            ["folder", "Folders"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            className={itemFilter === value ? "active" : ""}
+            onClick={() => onFilterChange(value)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {visibleItems.map((item) => (
         <ExplorerRow
           key={item.key}
           item={item}
@@ -680,6 +963,22 @@ function Explorer({
           onSelectFromRow={selectFromRow}
         />
       ))}
+      {!visibleItems.length && items.length > 0 && (
+        <p className="filtered-empty">
+          No {itemFilter === "file" ? "files" : "folders"} in this location.
+        </p>
+      )}
+      {hasMore && (
+        <button
+          type="button"
+          className="secondary load-more"
+          onClick={onLoadMore}
+          disabled={loadingMore}
+        >
+          {loadingMore && <LoaderCircle className="spin" size={15} />}
+          {loadingMore ? "Loading more…" : "Load more"}
+        </button>
+      )}
       {folderOpen && (
         <FolderModal
           onCancel={() => setFolderOpen(false)}
@@ -690,20 +989,70 @@ function Explorer({
           }}
         />
       )}
-      {deleteTarget && <DeleteFileModal item={deleteTarget} onCancel={() => setDeleteTarget(undefined)} onConfirm={async () => {
-        const id = `${Date.now()}-${deleteTarget.key}`;
-        setDeleteTarget(undefined);
-        setActivities((current) => [...current, { id, label: deleteTarget.name, kind: "delete", progress: 0, state: "active" }]);
-        try { await api.deleteFile(connection.id, deleteTarget.key); setActivities((current) => current.map((item) => item.id === id ? { ...item, progress: 100, state: "done" } : item)); onRefresh(); }
-        catch (err) { setActivities((current) => current.map((item) => item.id === id ? { ...item, state: "error", error: errorMessage(err) } : item)); }
-      }} />}
-      {deleteSelectionOpen && <DeleteFileModal count={selected.size} onCancel={() => setDeleteSelectionOpen(false)} onConfirm={async () => { setDeleteSelectionOpen(false); await confirmDeleteSelected(); }} />}
-      <ActivityTray activities={activities} onDismiss={(id) => setActivities((current) => current.filter((item) => item.id !== id))} />
+      {deleteTarget && (
+        <DeleteFileModal
+          item={deleteTarget}
+          onCancel={() => setDeleteTarget(undefined)}
+          onConfirm={async () => {
+            const id = `${Date.now()}-${deleteTarget.key}`;
+            setDeleteTarget(undefined);
+            setActivities((current) => [
+              ...current,
+              {
+                id,
+                label: deleteTarget.name,
+                kind: "delete",
+                progress: 0,
+                state: "active",
+              },
+            ]);
+            try {
+              await api.deleteFile(connection.id, deleteTarget.key);
+              setActivities((current) =>
+                current.map((item) =>
+                  item.id === id
+                    ? { ...item, progress: 100, state: "done" }
+                    : item,
+                ),
+              );
+              onRefresh();
+            } catch (err) {
+              setActivities((current) =>
+                current.map((item) =>
+                  item.id === id
+                    ? { ...item, state: "error", error: errorMessage(err) }
+                    : item,
+                ),
+              );
+            }
+          }}
+        />
+      )}
+      {deleteSelectionOpen && (
+        <DeleteFileModal
+          count={selected.size}
+          onCancel={() => setDeleteSelectionOpen(false)}
+          onConfirm={async () => {
+            setDeleteSelectionOpen(false);
+            await confirmDeleteSelected();
+          }}
+        />
+      )}
+      <ActivityTray
+        activities={activities}
+        onDismiss={(id) =>
+          setActivities((current) => current.filter((item) => item.id !== id))
+        }
+      />
     </section>
   );
 }
 
-function DownloadMenu({ onDownload }: { onDownload: (format: "zip" | "tgz") => void }) {
+function DownloadMenu({
+  onDownload,
+}: {
+  onDownload: (format: "zip" | "tgz") => void;
+}) {
   const [open, setOpen] = useState(false);
   function choose(format: "zip" | "tgz") {
     setOpen(false);
@@ -724,8 +1073,12 @@ function DownloadMenu({ onDownload }: { onDownload: (format: "zip" | "tgz") => v
       </button>
       {open && (
         <div className="download-options" role="menu">
-          <button type="button" role="menuitem" onClick={() => choose("zip")}>Download ZIP</button>
-          <button type="button" role="menuitem" onClick={() => choose("tgz")}>Download TGZ</button>
+          <button type="button" role="menuitem" onClick={() => choose("zip")}>
+            Download ZIP
+          </button>
+          <button type="button" role="menuitem" onClick={() => choose("tgz")}>
+            Download TGZ
+          </button>
         </div>
       )}
     </div>
@@ -787,23 +1140,126 @@ function FolderModal({
   );
 }
 
-function DeleteFileModal({ item, count, onCancel, onConfirm }: { item?: Item; count?: number; onCancel: () => void; onConfirm: () => Promise<void> }) {
+function DeleteFileModal({
+  item,
+  count,
+  onCancel,
+  onConfirm,
+}: {
+  item?: Item;
+  count?: number;
+  onCancel: () => void;
+  onConfirm: () => Promise<void>;
+}) {
   const multiple = !item;
-  return <div className="modal-backdrop"><div className="card small-modal">
-    <div className="modal-heading"><div><span className="eyebrow">DELETE {multiple ? "FILES" : "FILE"}</span><h2>{multiple ? `Delete ${count} selected files?` : "Delete this file?"}</h2></div><button className="modal-close" onClick={onCancel} aria-label="Close">×</button></div>
-    <p className="modal-description">This will permanently delete {multiple ? "the selected files" : <><strong>{item?.name}</strong></>} from the bucket. This cannot be undone.</p>
-    <div className="modal-actions"><button className="secondary" onClick={onCancel}>Cancel</button><button className="danger" onClick={onConfirm}>Delete {multiple ? "files" : "file"}</button></div>
-  </div></div>;
+  return (
+    <div className="modal-backdrop">
+      <div className="card small-modal">
+        <div className="modal-heading">
+          <div>
+            <span className="eyebrow">
+              DELETE {multiple ? "FILES" : "FILE"}
+            </span>
+            <h2>
+              {multiple
+                ? `Delete ${count} selected files?`
+                : "Delete this file?"}
+            </h2>
+          </div>
+          <button className="modal-close" onClick={onCancel} aria-label="Close">
+            ×
+          </button>
+        </div>
+        <p className="modal-description">
+          This will permanently delete{" "}
+          {multiple ? (
+            "the selected files"
+          ) : (
+            <>
+              <strong>{item?.name}</strong>
+            </>
+          )}{" "}
+          from the bucket. This cannot be undone.
+        </p>
+        <div className="modal-actions">
+          <button className="secondary" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="danger" onClick={onConfirm}>
+            Delete {multiple ? "files" : "file"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
-function ActivityTray({ activities, onDismiss }: { activities: Activity[]; onDismiss: (id: string) => void }) {
+function ActivityTray({
+  activities,
+  onDismiss,
+}: {
+  activities: Activity[];
+  onDismiss: (id: string) => void;
+}) {
   const [minimized, setMinimized] = useState(false);
   if (!activities.length) return null;
-  return <div className={`activity-tray ${minimized ? "minimized" : ""}`}><div className="activity-header"><strong>Activity</strong><button onClick={() => setMinimized((value) => !value)}>{minimized ? "Show" : "Minimize"}</button></div>{!minimized && <div className="activity-list">{activities.map((activity) => <div className="activity" key={activity.id}>
-    <div className="activity-top"><span>{activity.kind === "upload" ? "Uploading" : activity.kind === "delete" ? "Deleting" : "Downloading"} {activity.label}</span>{activity.state !== "active" && <button className="activity-dismiss" onClick={() => onDismiss(activity.id)}>×</button>}</div>
-    <div className="activity-progress"><span className={`${activity.state} ${activity.kind !== "upload" && activity.state === "active" ? "indeterminate" : ""}`} style={{ width: `${activity.progress}%` }} /></div>
-    <small>{activity.state === "active" ? (activity.kind === "upload" ? `${activity.progress}%` : "Working…") : activity.state === "done" ? <><Check size={13} /> Complete</> : activity.error || "Failed"}</small>
-  </div>)}</div>}</div>;
+  return (
+    <div className={`activity-tray ${minimized ? "minimized" : ""}`}>
+      <div className="activity-header">
+        <strong>Activity</strong>
+        <button onClick={() => setMinimized((value) => !value)}>
+          {minimized ? "Show" : "Minimize"}
+        </button>
+      </div>
+      {!minimized && (
+        <div className="activity-list">
+          {activities.map((activity) => (
+            <div className="activity" key={activity.id}>
+              <div className="activity-top">
+                <span>
+                  {activity.kind === "upload"
+                    ? "Uploading"
+                    : activity.kind === "delete"
+                      ? "Deleting"
+                      : "Downloading"}{" "}
+                  {activity.label}
+                </span>
+                {activity.state !== "active" && (
+                  <button
+                    className="activity-dismiss"
+                    onClick={() => onDismiss(activity.id)}
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+              <div className="activity-progress">
+                <span
+                  className={`${activity.state} ${activity.kind !== "upload" && activity.state === "active" ? "indeterminate" : ""}`}
+                  style={{ width: `${activity.progress}%` }}
+                />
+              </div>
+              <small>
+                {activity.state === "active" ? (
+                  activity.kind === "upload" ? (
+                    `${activity.progress}%`
+                  ) : (
+                    "Working…"
+                  )
+                ) : activity.state === "done" ? (
+                  <>
+                    <Check size={13} /> Complete
+                  </>
+                ) : (
+                  activity.error || "Failed"
+                )}
+              </small>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ExplorerRow({
@@ -843,7 +1299,13 @@ function ExplorerRow({
             );
       }}
     >
-      <input type="checkbox" checked={selected} onChange={() => onToggleSelected(item.key)} onClick={(event) => event.stopPropagation()} aria-label={`Select ${item.name}`} />
+      <input
+        type="checkbox"
+        checked={selected}
+        onChange={() => onToggleSelected(item.key)}
+        onClick={(event) => event.stopPropagation()}
+        aria-label={`Select ${item.name}`}
+      />
       <span>
         {item.kind === "folder" ? <Folder size={18} /> : <File size={18} />}{" "}
         {item.name}
@@ -852,7 +1314,11 @@ function ExplorerRow({
       <span>{item.size ? `${(item.size / 1024).toFixed(1)} KB` : "—"}</span>
       <span>
         {item.kind === "file" && (
-          <button className="icon" onClick={remove} aria-label={`Delete ${item.name}`}>
+          <button
+            className="icon"
+            onClick={remove}
+            aria-label={`Delete ${item.name}`}
+          >
             <Trash2 size={16} />
           </button>
         )}

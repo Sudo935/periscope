@@ -14,6 +14,12 @@ export type Item = {
   size?: number;
   modified?: string;
 };
+export type BrowseResponse = {
+  items: Item[];
+  nextToken?: string;
+  hasMore: boolean;
+};
+export type BrowseKind = "all" | "file" | "folder";
 export type Settings = { theme?: "light" | "dark" };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -55,9 +61,14 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(settings),
     }),
-  browse: (id: string, prefix: string) =>
-    request<{ items: Item[] }>(
-      `/api/browse?connection=${id}&prefix=${encodeURIComponent(prefix)}`,
+  browse: (
+    id: string,
+    prefix: string,
+    kind: BrowseKind = "all",
+    nextToken = "",
+  ) =>
+    request<BrowseResponse>(
+      `/api/browse?connection=${id}&prefix=${encodeURIComponent(prefix)}&kind=${kind}${nextToken ? `&continuationToken=${encodeURIComponent(nextToken)}` : ""}`,
     ),
   connections: () => request<Connection[]>("/api/connections"),
   addConnection: (value: object) =>
@@ -92,10 +103,9 @@ export const api = {
       },
     ),
   deleteFile: (id: string, key: string) =>
-    request<void>(
-      `/api/file?connection=${id}&key=${encodeURIComponent(key)}`,
-      { method: "DELETE" },
-    ),
+    request<void>(`/api/file?connection=${id}&key=${encodeURIComponent(key)}`, {
+      method: "DELETE",
+    }),
   download: (id: string, prefix: string, format: "zip" | "tgz") =>
     fetch(
       `/api/download?connection=${id}&prefix=${encodeURIComponent(prefix)}&format=${format}`,
@@ -103,14 +113,28 @@ export const api = {
       if (!response.ok) throw new Error(await response.text());
       return response.blob();
     }),
-  upload: (id: string, prefix: string, file: File, onProgress?: (value: number) => void) => {
+  upload: (
+    id: string,
+    prefix: string,
+    file: File,
+    onProgress?: (value: number) => void,
+  ) => {
     const body = new FormData();
     body.append("file", file);
     return new Promise<void>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open("POST", `/api/upload?connection=${id}&prefix=${encodeURIComponent(prefix)}`);
-      xhr.upload.onprogress = (event) => { if (event.lengthComputable) onProgress?.(Math.round((event.loaded / event.total) * 100)); };
-      xhr.onload = () => { if (xhr.status >= 200 && xhr.status < 300) resolve(); else reject(new Error(xhr.responseText || "Upload failed")); };
+      xhr.open(
+        "POST",
+        `/api/upload?connection=${id}&prefix=${encodeURIComponent(prefix)}`,
+      );
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable)
+          onProgress?.(Math.round((event.loaded / event.total) * 100));
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(new Error(xhr.responseText || "Upload failed"));
+      };
       xhr.onerror = () => reject(new Error("Upload failed"));
       xhr.send(body);
     });

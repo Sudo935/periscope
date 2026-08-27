@@ -443,24 +443,50 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 	if prefix == "" {
 		prefix = c.Prefix
 	}
-	result, err := client.ListObjectsV2(r.Context(), &s3.ListObjectsV2Input{Bucket: aws.String(c.Bucket), Prefix: aws.String(prefix), Delimiter: aws.String("/")})
+	kind := r.URL.Query().Get("kind")
+	if kind == "" {
+		kind = "all"
+	}
+	if kind != "all" && kind != "file" && kind != "folder" {
+		fail(w, http.StatusBadRequest, fmt.Errorf("invalid browse kind %q", kind))
+		return
+	}
+	input := &s3.ListObjectsV2Input{
+		Bucket:    aws.String(c.Bucket),
+		Prefix:    aws.String(prefix),
+		Delimiter: aws.String("/"),
+	}
+	if token := r.URL.Query().Get("continuationToken"); token != "" {
+		input.ContinuationToken = aws.String(token)
+	}
+	result, err := client.ListObjectsV2(r.Context(), input)
 	if err != nil {
 		fail(w, 502, err)
 		return
 	}
 	items := make([]item, 0)
-	for _, p := range result.CommonPrefixes {
-		key := aws.ToString(p.Prefix)
-		items = append(items, item{Name: strings.TrimSuffix(strings.TrimPrefix(key, prefix), "/"), Key: key, Kind: "folder"})
+	if kind != "file" {
+		for _, p := range result.CommonPrefixes {
+			key := aws.ToString(p.Prefix)
+			items = append(items, item{Name: strings.TrimSuffix(strings.TrimPrefix(key, prefix), "/"), Key: key, Kind: "folder"})
+		}
 	}
-	for _, object := range result.Contents {
-		key := aws.ToString(object.Key)
-		if key != prefix {
-			items = append(items, item{Name: path.Base(key), Key: key, Kind: "file", Size: aws.ToInt64(object.Size), Modified: object.LastModified})
+	if kind != "folder" {
+		for _, object := range result.Contents {
+			key := aws.ToString(object.Key)
+			if key != prefix {
+				items = append(items, item{Name: path.Base(key), Key: key, Kind: "file", Size: aws.ToInt64(object.Size), Modified: object.LastModified})
+			}
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Kind > items[j].Kind || items[i].Name < items[j].Name })
-	write(w, map[string]any{"connection": c.Name, "prefix": prefix, "items": items})
+	write(w, map[string]any{
+		"connection": c.Name,
+		"prefix":     prefix,
+		"items":      items,
+		"nextToken":  aws.ToString(result.NextContinuationToken),
+		"hasMore":    aws.ToBool(result.IsTruncated),
+	})
 }
 func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 	session, _, data, err := s.unlocked(r)
