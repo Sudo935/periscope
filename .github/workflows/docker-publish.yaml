@@ -5,7 +5,7 @@ on:
     branches: [main]
   push:
     branches: [main]
-    tags: ["v*.*.*"]
+    tags: ["[0-9]+.[0-9]+.[0-9]+"]
 
 env:
   REGISTRY: ghcr.io
@@ -104,8 +104,12 @@ jobs:
         run: |
           if [ "$REF" = "refs/heads/$DEFAULT_BRANCH" ]; then
             target_tag="latest"
-          elif [[ "$REF" == refs/tags/v* ]]; then
-            target_tag="${REF_NAME#v}"
+          elif [[ "$REF" == refs/tags/* ]]; then
+            if [[ ! "$REF_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Release tag must be plain semver x.y.z: $REF_NAME" >&2
+              exit 1
+            fi
+            target_tag="$REF_NAME"
           else
             echo "No production promotion for $REF"
             exit 0
@@ -116,11 +120,11 @@ jobs:
         run: helm lint deploy/helm/mariner
 
       - name: Package and publish chart
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           VERSION: ${{ github.ref_name }}
         run: |
-          chart_version="${VERSION#v}"
+          chart_version="${VERSION}"
           helm package deploy/helm/mariner --version "$chart_version" --app-version "$chart_version"
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
           helm push "mariner-${chart_version}.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts"
@@ -183,7 +187,7 @@ jobs:
               versions.extend(batch)
               page += 1
 
-          semver = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+          semver = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
           artifact = re.compile(r"^sha256-([0-9a-f]{64})\.")
 
           def tags(version):
