@@ -132,7 +132,7 @@ jobs:
     permissions:
       packages: write
     env:
-      REGISTRY: ${{ env.REGISTRY }}
+      REGISTRY: ghcr.io
       OWNER: ${{ github.repository_owner }}
       PACKAGE_NAME: ${{ github.event.repository.name }}
       CURRENT_DIGEST: ${{ needs.build-scan-release.outputs.published-digest }}
