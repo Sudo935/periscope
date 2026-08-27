@@ -524,39 +524,40 @@ function UnlockModal({
         <button className="button" type="submit">
           {initialSetup ? "Create encrypted vault" : "Unlock vault"}
         </button>
-        {!initialSetup && !confirmDestroy ? (
-          <button
-            type="button"
-            className="forgot-password"
-            onClick={() => setConfirmDestroy(true)}
-          >
-            <AlertTriangle size={15} />
-            Forgot your master password?
-          </button>
-        ) : (
-          <div className="danger-panel">
-            <div className="danger-heading">
-              <AlertTriangle size={18} />
-              <strong>Destroy this vault?</strong>
+        {!initialSetup &&
+          (!confirmDestroy ? (
+            <button
+              type="button"
+              className="forgot-password"
+              onClick={() => setConfirmDestroy(true)}
+            >
+              <AlertTriangle size={15} />
+              Forgot your master password?
+            </button>
+          ) : (
+            <div className="danger-panel">
+              <div className="danger-heading">
+                <AlertTriangle size={18} />
+                <strong>Destroy this vault?</strong>
+              </div>
+              <p>
+                This permanently deletes every saved connection. It cannot be
+                undone, and you will need to create a new master password.
+              </p>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setConfirmDestroy(false)}
+                >
+                  Keep vault
+                </button>
+                <button type="button" className="danger" onClick={onDestroy}>
+                  Destroy vault
+                </button>
+              </div>
             </div>
-            <p>
-              This permanently deletes every saved connection. It cannot be
-              undone, and you will need to create a new master password.
-            </p>
-            <div className="modal-actions">
-              <button
-                type="button"
-                className="secondary"
-                onClick={() => setConfirmDestroy(false)}
-              >
-                Keep vault
-              </button>
-              <button type="button" className="danger" onClick={onDestroy}>
-                Destroy vault
-              </button>
-            </div>
-          </div>
-        )}
+          ))}
       </form>
     </div>
   );
