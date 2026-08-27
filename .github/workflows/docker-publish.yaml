@@ -14,6 +14,8 @@ env:
 jobs:
   build-scan-release:
     runs-on: ubuntu-latest
+    outputs:
+      published-digest: ${{ steps.image.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -121,3 +123,98 @@ jobs:
           helm package deploy/helm/mariner --version "$chart_version" --app-version "$chart_version"
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
           helm push "mariner-${chart_version}.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts"
+
+  prune-registry:
+    name: Prune GHCR images and signatures
+    runs-on: ubuntu-latest
+    needs: build-scan-release
+    if: github.event_name != 'pull_request'
+    permissions:
+      packages: write
+    env:
+      REGISTRY: ${{ env.REGISTRY }}
+      OWNER: ${{ github.repository_owner }}
+      PACKAGE_NAME: ${{ github.event.repository.name }}
+      CURRENT_DIGEST: ${{ needs.build-scan-release.outputs.published-digest }}
+      KEEP_SEMVER_COUNT: "5"
+    steps:
+      - name: Prune stale GHCR versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+
+          owner = os.environ["OWNER"]
+          package = os.environ["PACKAGE_NAME"]
+          current_digest = os.environ.get("CURRENT_DIGEST", "")
+          keep_semver_count = int(os.environ.get("KEEP_SEMVER_COUNT", "5"))
+
+          def gh(path, method="GET"):
+              command = ["gh", "api", "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28"]
+              if method != "GET":
+                  command.extend(["-X", method])
+              command.append(path)
+              return subprocess.run(command, text=True, capture_output=True)
+
+          def package_base():
+              org = gh(f"/orgs/{owner}")
+              if org.returncode == 0:
+                  return f"/orgs/{owner}/packages/container/{package}/versions"
+              return f"/users/{owner}/packages/container/{package}/versions"
+
+          base = package_base()
+          versions = []
+          page = 1
+          while True:
+              result = gh(f"{base}?per_page=100&page={page}")
+              result.check_returncode()
+              batch = json.loads(result.stdout)
+              if not batch:
+                  break
+              versions.extend(batch)
+              page += 1
+
+          semver = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+          artifact = re.compile(r"^sha256-([0-9a-f]{64})\.")
+
+          def tags(version):
+              return set(version.get("metadata", {}).get("container", {}).get("tags", []) or [])
+
+          release_tags = sorted(
+              {tag for version in versions for tag in tags(version) if semver.match(tag)},
+              reverse=True,
+          )[:keep_semver_count]
+          keep_tags = {"latest", "main", *release_tags}
+          current_hex = current_digest.removeprefix("sha256:")
+          keep_ids = set()
+          keep_digests = {current_hex} if current_hex else set()
+
+          for version in versions:
+              version_tags = tags(version)
+              digest = version.get("name", "")
+              digest_hex = digest.removeprefix("sha256:")
+              if version_tags & keep_tags or digest_hex in keep_digests:
+                  keep_ids.add(version["id"])
+                  if digest_hex:
+                      keep_digests.add(digest_hex)
+
+          for version in versions:
+              subjects = {match.group(1) for tag in tags(version) if (match := artifact.match(tag))}
+              if subjects & keep_digests:
+                  keep_ids.add(version["id"])
+
+          deleted = 0
+          for version in versions:
+              if version["id"] in keep_ids:
+                  continue
+              result = gh(f"{base}/{version['id']}", method="DELETE")
+              if result.returncode != 0:
+                  raise RuntimeError(result.stderr or result.stdout)
+              deleted += 1
+
+          print(f"Kept {len(keep_ids)} GHCR versions; deleted {deleted} stale versions")
+          PY
