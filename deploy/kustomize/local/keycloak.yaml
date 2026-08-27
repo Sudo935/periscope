@@ -12,23 +12,9 @@ spec:
       labels:
         app: keycloak
     spec:
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
-        seccompProfile:
-          type: RuntimeDefault
       containers:
         - name: keycloak
           image: quay.io/keycloak/keycloak:26.3.3
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: [ALL]
-            readOnlyRootFilesystem: true
-            seccompProfile:
-              type: RuntimeDefault
           args: ["start-dev", "--import-realm"]
           env:
             - name: KC_BOOTSTRAP_ADMIN_USERNAME
@@ -55,17 +41,9 @@ spec:
             - name: http
               containerPort: 8080
           volumeMounts:
-            - name: keycloak-data
-              mountPath: /opt/keycloak/data
-            - name: keycloak-tmp
-              mountPath: /tmp
             - name: realm
               mountPath: /opt/keycloak/data/import
       volumes:
-        - name: keycloak-data
-          emptyDir: {}
-        - name: keycloak-tmp
-          emptyDir: {}
         - name: realm
           configMap:
             name: keycloak-realm

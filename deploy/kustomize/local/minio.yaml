@@ -12,27 +12,11 @@ spec:
       labels:
         app: minio
     spec:
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
-        seccompProfile:
-          type: RuntimeDefault
       containers:
         - name: minio
           image: quay.io/minio/minio:latest
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: [ALL]
-            readOnlyRootFilesystem: true
-            seccompProfile:
-              type: RuntimeDefault
           args: ["server", "/data", "--console-address", ":9001"]
           env:
-            - name: HOME
-              value: /tmp
             - name: MINIO_ROOT_USER
               value: minioadmin
             - name: MINIO_ROOT_PASSWORD
@@ -42,16 +26,6 @@ spec:
               containerPort: 9000
             - name: console
               containerPort: 9001
-          volumeMounts:
-            - name: minio-data
-              mountPath: /data
-            - name: minio-tmp
-              mountPath: /tmp
-      volumes:
-        - name: minio-data
-          emptyDir: {}
-        - name: minio-tmp
-          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
