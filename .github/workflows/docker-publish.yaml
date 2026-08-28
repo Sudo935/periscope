@@ -311,6 +311,7 @@ jobs:
     env:
       OWNER: ${{ github.repository_owner }}
       PACKAGE_NAME: ${{ github.event.repository.name }}
+      CURRENT_TAG: ${{ github.ref_name }}
       KEEP_SEMVER_COUNT: "5"
     steps:
       - name: Prune stale chart versions
@@ -322,11 +323,13 @@ jobs:
           import os
           import re
           import subprocess
+          import time
           from urllib.parse import quote
 
           owner = os.environ["OWNER"]
           package = quote(f"charts/{os.environ['PACKAGE_NAME']}", safe="")
           keep_count = int(os.environ.get("KEEP_SEMVER_COUNT", "5"))
+          current_tag = os.environ["CURRENT_TAG"]
 
           def gh(path, method="GET"):
               command = ["gh", "api", "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28"]
@@ -338,21 +341,34 @@ jobs:
           org = gh(f"/orgs/{owner}")
           prefix = f"/orgs/{owner}" if org.returncode == 0 else f"/users/{owner}"
           base = f"{prefix}/packages/container/{package}/versions"
-          versions = []
-          page = 1
-          while True:
-              result = gh(f"{base}?per_page=100&page={page}")
-              result.check_returncode()
-              batch = json.loads(result.stdout)
-              if not batch:
-                  break
-              versions.extend(batch)
-              page += 1
-
           semver = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 
           def tags(version):
               return set(version.get("metadata", {}).get("container", {}).get("tags", []) or [])
+
+          def load_versions():
+              loaded = []
+              page = 1
+              while True:
+                  result = gh(f"{base}?per_page=100&page={page}")
+                  result.check_returncode()
+                  batch = json.loads(result.stdout)
+                  if not batch:
+                      break
+                  loaded.extend(batch)
+                  page += 1
+              return loaded
+
+          versions = load_versions()
+          for attempt in range(12):
+              if any(current_tag in tags(version) for version in versions):
+                  break
+              if attempt == 11:
+                  raise RuntimeError(
+                      f"GHCR did not expose the current chart tag {current_tag}; refusing to prune"
+                  )
+              time.sleep(10)
+              versions = load_versions()
 
           keep_tags = {
               tag
@@ -361,6 +377,7 @@ jobs:
                   reverse=True,
               )[:keep_count]
           }
+          keep_tags.add(current_tag)
           keep_ids = {version["id"] for version in versions if tags(version) & keep_tags}
           deleted = 0
           for version in versions:
