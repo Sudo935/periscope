@@ -195,6 +195,7 @@ jobs:
       REGISTRY: ghcr.io
       OWNER: ${{ github.repository_owner }}
       PACKAGE_NAME: ${{ github.event.repository.name }}
+      CURRENT_TAG: ${{ github.ref_name }}
       CURRENT_DIGEST: ${{ needs.publish-release.outputs.published-digest }}
       KEEP_SEMVER_COUNT: "5"
     steps:
@@ -210,11 +211,13 @@ jobs:
           import os
           import re
           import subprocess
+          import time
 
           owner = os.environ["OWNER"]
           package = os.environ["PACKAGE_NAME"]
           image = f"{os.environ['REGISTRY']}/{owner}/{package}"
           current_digest = os.environ.get("CURRENT_DIGEST", "")
+          current_tag = os.environ["CURRENT_TAG"]
           keep_semver_count = int(os.environ.get("KEEP_SEMVER_COUNT", "5"))
 
           def gh(path, method="GET"):
@@ -252,7 +255,7 @@ jobs:
               {tag for version in versions for tag in tags(version) if semver.match(tag)},
               reverse=True,
           )[:keep_semver_count]
-          keep_tags = {"latest", "main", *release_tags}
+          keep_tags = {"latest", "main", current_tag, *release_tags}
           current_hex = current_digest.removeprefix("sha256:")
           keep_ids = set()
           keep_digests = {current_hex} if current_hex else set()
@@ -266,18 +269,92 @@ jobs:
                   if digest_hex:
                       keep_digests.add(digest_hex)
 
-          for tag in keep_tags:
-              manifest = subprocess.run(["oras", "manifest", "fetch", f"{image}:{tag}"], text=True, capture_output=True)
-              if manifest.returncode != 0:
-                  continue
+          def fetch_manifest(reference):
+              result = subprocess.run(
+                  ["oras", "manifest", "fetch", reference],
+                  text=True,
+                  capture_output=True,
+              )
+              if result.returncode != 0:
+                  return None
               try:
-                  document = json.loads(manifest.stdout)
+                  return json.loads(result.stdout)
               except json.JSONDecodeError:
-                  continue
+                  return None
+
+          def walk_descriptor_graph(reference, digest, visited):
+              digest = digest.removeprefix("sha256:")
+              if digest:
+                  keep_digests.add(digest)
+              visit_key = digest or reference
+              if visit_key in visited:
+                  return
+              visited.add(visit_key)
+              document = fetch_manifest(reference)
+              if document is None:
+                  raise RuntimeError(f"could not fetch kept manifest {reference}")
+              config = document.get("config", {})
+              if config.get("digest"):
+                  keep_digests.add(config["digest"].removeprefix("sha256:"))
+              for layer in document.get("layers", []) or []:
+                  if layer.get("digest"):
+                      keep_digests.add(layer["digest"].removeprefix("sha256:"))
               for child in document.get("manifests", []) or []:
-                  child_digest = child.get("digest", "").removeprefix("sha256:")
+                  child_digest = child.get("digest", "")
                   if child_digest:
-                      keep_digests.add(child_digest)
+                      child_ref = f"{image}@{child_digest}"
+                      walk_descriptor_graph(child_ref, child_digest, visited)
+
+          def walk_referrers(reference, visited):
+              result = subprocess.run(
+                  ["oras", "discover", "--format", "json", "--depth", "1", reference],
+                  text=True,
+                  capture_output=True,
+              )
+              if result.returncode != 0:
+                  raise RuntimeError(f"could not discover referrers for kept image {reference}")
+              try:
+                  document = json.loads(result.stdout)
+              except json.JSONDecodeError as error:
+                  raise RuntimeError(f"invalid referrer response for kept image {reference}") from error
+              for referrer in document.get("referrers", []) or []:
+                  digest = referrer.get("digest", "")
+                  if digest:
+                      walk_descriptor_graph(f"{image}@{digest}", digest, visited)
+
+          # GHCR can expose the package tag before all index children are
+          # visible. Never prune while the current release graph is incomplete.
+          current_reference = f"{image}:{current_tag}"
+          current_document = None
+          for attempt in range(12):
+              current_document = fetch_manifest(current_reference)
+              if current_document is not None:
+                  break
+              if attempt == 11:
+                  raise RuntimeError(
+                      f"GHCR did not expose the current image tag {current_tag}; refusing to prune"
+                  )
+              time.sleep(10)
+
+          visited = set()
+          walk_descriptor_graph(
+              f"{image}@sha256:{current_hex}" if current_hex else current_reference,
+              current_hex,
+              visited,
+          )
+
+          for tag in keep_tags:
+              manifest = fetch_manifest(f"{image}:{tag}")
+              if manifest is None:
+                  if tag == current_tag or tag in {
+                      tag_name
+                      for version in versions
+                      for tag_name in tags(version)
+                  }:
+                      raise RuntimeError(f"could not fetch kept image tag {tag}; refusing to prune")
+                  continue
+              walk_descriptor_graph(f"{image}:{tag}", "", visited)
+              walk_referrers(f"{image}:{tag}", visited)
 
           for version in versions:
               digest = version.get("name", "").removeprefix("sha256:")
