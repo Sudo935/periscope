@@ -146,6 +146,14 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
+      - name: Install ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Log in to GHCR for ORAS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GH_TOKEN" | oras login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+
       - name: Promote image digest
         id: promote
         env:
@@ -167,14 +175,9 @@ jobs:
             echo "No production promotion for $REF"
             exit 0
           fi
-          docker buildx imagetools create --tag "${IMAGE}:${target_tag}" "${IMAGE}@${DIGEST}"
-          promoted_digest="$(docker buildx imagetools inspect "${IMAGE}:${target_tag}" | awk '/Digest:/ {print $2; exit}')"
-          if [[ ! "$promoted_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Could not resolve promoted image digest for ${IMAGE}:${target_tag}" >&2
-            exit 1
-          fi
-          echo "Promoted ${IMAGE}:${target_tag} at ${promoted_digest}"
-          echo "digest=${promoted_digest}" >> "$GITHUB_OUTPUT"
+          oras tag "${IMAGE}@${DIGEST}" "${target_tag}"
+          echo "Promoted ${IMAGE}:${target_tag} at ${DIGEST}"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
 
       - name: Sign promoted image
         env:
@@ -320,6 +323,25 @@ jobs:
               except json.JSONDecodeError:
                   return None
 
+          def legacy_artifact_descriptors(subjects):
+              result = subprocess.run(
+                  ["oras", "repo", "tags", image],
+                  text=True,
+                  capture_output=True,
+              )
+              if result.returncode != 0:
+                  raise RuntimeError(f"could not list tags for {image}")
+              descriptors = set()
+              for tag in result.stdout.splitlines():
+                  tag = tag.strip()
+                  match = artifact.match(tag)
+                  if not match or match.group(1) not in subjects:
+                      continue
+                  descriptor = fetch_descriptor(f"{image}:{tag}")
+                  if descriptor and descriptor.get("digest"):
+                      descriptors.add(descriptor["digest"].removeprefix("sha256:"))
+              return descriptors
+
           def walk_descriptor_graph(reference, digest, visited):
               digest = digest.removeprefix("sha256:")
               if digest:
@@ -402,6 +424,7 @@ jobs:
                   descriptor = fetch_descriptor(f"{image}:sha256-{subject}.{suffix}")
                   if descriptor and descriptor.get("digest"):
                       keep_digests.add(descriptor["digest"].removeprefix("sha256:"))
+          keep_digests.update(legacy_artifact_descriptors(set(keep_digests)))
 
           for version in versions:
               digest = version.get("name", "").removeprefix("sha256:")
