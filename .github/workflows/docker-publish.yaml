@@ -180,7 +180,8 @@ jobs:
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           DIGEST: ${{ steps.promote.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+          TAG: ${{ github.ref_name }}
+        run: echo "${IMAGE}:${TAG}" | xargs -I {} cosign sign --yes "{}@${DIGEST}"
 
       - name: Verify promoted image signature
         env:
@@ -265,6 +266,10 @@ jobs:
               page += 1
 
           semver = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+          # Cosign signatures and related OCI artifacts are tagged with the
+          # digest of their subject, for example sha256-<digest>.sig. Keep
+          # those artifacts whenever the subject image is retained, even if
+          # the registry's referrer index is eventually consistent.
           artifact = re.compile(r"^sha256-([0-9a-f]{64})\.")
 
           def tags(version):
