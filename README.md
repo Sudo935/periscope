@@ -38,7 +38,8 @@ database:
     databaseKey: dbname
     usernameKey: user
     passwordKey: pass
-    sslModeKey: sslmode
+  # PostgreSQL TLS mode is configured in Helm values, not in the Secret.
+  sslMode: disable
 ```
 
 Alternatively, set `existingSecret.urlKey` to use one Secret field containing a complete PostgreSQL URL.

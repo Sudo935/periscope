@@ -133,11 +133,7 @@ spec:
                   name: {{ .Values.database.existingSecret.name }}
                   key: {{ required "database.existingSecret.passwordKey is required" .Values.database.existingSecret.passwordKey }}
             - name: DATABASE_SSLMODE
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.database.existingSecret.name }}
-                  key: {{ default "sslmode" .Values.database.existingSecret.sslModeKey }}
-                  optional: true
+              value: {{ default "disable" .Values.database.sslMode | quote }}
             {{- else if .Values.database.url }}
             - name: DATABASE_URL
               value: {{ .Values.database.url | quote }}

@@ -139,6 +139,9 @@ database:
   # single-replica deployments.
   driver: postgres
   url: ""
+  # PostgreSQL TLS mode is chart configuration, not a database Secret field.
+  # Examples: disable, require, verify-ca, or verify-full.
+  sslMode: disable
   existingSecret:
     name: ""
     # A URL key may be used by setting urlKey and leaving the field selectors
@@ -150,7 +153,6 @@ database:
     databaseKey: database
     usernameKey: username
     passwordKey: password
-    sslModeKey: sslmode
 organizationEncryption:
   # The chart creates this once and preserves it on upgrades and
   # uninstall/reinstall. Remove the Secret explicitly to rotate it.
