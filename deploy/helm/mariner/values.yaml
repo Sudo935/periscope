@@ -118,7 +118,9 @@ organizations: {}
 #             key: s3/engineering/secret-key
 extraObjects: []
 persistence:
-  enabled: true
+  # PostgreSQL-backed deployments do not need a shared application PVC.
+  # Set true when using SQLite and retaining the vault across restarts.
+  enabled: false
   storageClass: ""
   accessModes: [ReadWriteOnce]
   size: 1Gi
@@ -132,6 +134,51 @@ resources:
   limits:
     cpu: 500m
     memory: 256Mi
+database:
+  # postgres is the default. Set driver: sqlite for lightweight
+  # single-replica deployments.
+  driver: postgres
+  url: ""
+  existingSecret:
+    name: ""
+    # A URL key may be used by setting urlKey and leaving the field selectors
+    # empty. Otherwise Mariner assembles a URL from these independently named
+    # Secret keys. Host, database, username, and password are required.
+    urlKey: ""
+    hostKey: host
+    portKey: port
+    databaseKey: database
+    usernameKey: username
+    passwordKey: password
+    sslModeKey: sslmode
+organizationEncryption:
+  # The chart creates this once and preserves it on upgrades and
+  # uninstall/reinstall. Remove the Secret explicitly to rotate it.
+  enabled: true
+  secretName: ""
+  key: encryptionKey
+  # Set existingSecret.name to use a Secret managed outside Helm (for
+  # example by ExternalSecrets). When set, the chart does not create a
+  # Secret and uses the selected key instead.
+  existingSecret:
+    name: ""
+    key: encryptionKey
+audit:
+  enabled: true
+  # Users must have this exact OIDC group to access /admin audit history.
+  adminGroup: admins
+  sidecar:
+    # The default polls the database for new audit rows and writes their exact
+    # event_json to stdout for Alloy/Loki. Replace image/command/args for a
+    # direct Splunk HEC shipper.
+    enabled: true
+    image: ""
+    command: []
+    args: []
+    env: []
+    envFrom: []
+extraVolumes: []
+extraVolumeMounts: []
 nodeSelector: {}
 tolerations: []
 affinity: {}

@@ -2,7 +2,7 @@
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 {{- define "mariner.fullname" -}}
-{{- if .Values.fullnameOverride }}{{ .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}{{ else }}{{ printf "%s-%s" .Release.Name (include "mariner.name" .) | trunc 63 | trimSuffix "-" }}{{ end }}
+{{- if .Values.fullnameOverride }}{{ .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}{{ else if eq .Release.Name (include "mariner.name" .) }}{{ .Release.Name | trunc 63 | trimSuffix "-" }}{{ else }}{{ printf "%s-%s" .Release.Name (include "mariner.name" .) | trunc 63 | trimSuffix "-" }}{{ end }}
 {{- end }}
 {{- define "mariner.labels" -}}
 app.kubernetes.io/name: {{ include "mariner.name" . }}
@@ -19,4 +19,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 {{- define "mariner.secretName" -}}
 {{- default (include "mariner.fullname" .) .Values.existingSecret.name }}
+{{- end }}
+{{- define "mariner.organizationEncryptionSecretName" -}}
+{{- if .Values.organizationEncryption.existingSecret.name }}{{ .Values.organizationEncryption.existingSecret.name }}{{ else }}{{ default (printf "%s-org-encryption" (include "mariner.fullname" .)) .Values.organizationEncryption.secretName | trunc 63 | trimSuffix "-" }}{{ end }}
+{{- end }}
+{{- define "mariner.organizationEncryptionSecretKey" -}}
+{{- if .Values.organizationEncryption.existingSecret.name }}{{ required "organizationEncryption.existingSecret.key is required" .Values.organizationEncryption.existingSecret.key }}{{ else }}{{ required "organizationEncryption.key is required" .Values.organizationEncryption.key }}{{ end }}
 {{- end }}

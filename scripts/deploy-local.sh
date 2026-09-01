@@ -5,7 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TRAEFIK_IP="$(kubectl -n infra get svc traefik -o jsonpath='{.spec.clusterIP}')"
 
 kubectl create namespace mariner --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n mariner apply -f "$ROOT_DIR/deploy/kustomize/local/mariner-postgres.yaml"
 kubectl apply -k "$ROOT_DIR/deploy/kustomize/local"
+kubectl -n mariner wait --for=condition=available deployment/mariner-db --timeout=2m
 
 # The local Kustomize namespace transformer places the bootstrap CA Certificate
 # in infra. ClusterIssuer reads its CA keypair from cert-manager, and Mariner
@@ -20,8 +22,35 @@ for namespace in cert-manager mariner; do
 done
 kubectl -n infra wait --for=condition=Ready certificate/sslip-io-tls --timeout=2m
 
+kubectl -n mariner create secret generic mariner-postgres \
+  --from-literal=host=mariner-db.mariner.svc.cluster.local \
+  --from-literal=port=5432 \
+  --from-literal=database=mariner \
+  --from-literal=username=mariner \
+  --from-literal=password='MarinerPostgres123!' \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl -n mariner create secret generic mariner-bucket-s3 \
+  --from-literal=accessKey=mariner-access \
+  --from-literal=secretKey=MarinerBucket123! \
+  --dry-run=client -o yaml | kubectl apply -f -
+for bucket in one two three; do
+  case "$bucket" in
+    one) access_key=org1one-access; secret_key=Org1BucketOne123! ;;
+    two) access_key=org1two-access; secret_key=Org1BucketTwo123! ;;
+    three) access_key=org1three-access; secret_key=Org1BucketThree123! ;;
+  esac
+  kubectl -n mariner create secret generic "org1-bucket-${bucket}-s3" \
+    --from-literal=accessKey="$access_key" \
+    --from-literal=secretKey="$secret_key" \
+    --dry-run=client -o yaml | kubectl apply -f -
+done
+
 helm upgrade --install mariner "$ROOT_DIR/deploy/helm/mariner" \
   --namespace mariner \
+  --values "$ROOT_DIR/deploy/helm/mariner/values-local-org1.yaml" \
+  --set database.driver=postgres \
+  --set database.existingSecret.name=mariner-postgres \
   --set image.repository=localhost/mariner \
   --set image.tag=local \
   --set image.pullPolicy=Never \

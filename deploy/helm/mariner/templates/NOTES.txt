@@ -6,4 +6,10 @@ Configure the OIDC client callback URL as:
 If ingress is disabled, reach the service with:
   kubectl port-forward svc/{{ include "mariner.fullname" . }} 8080:{{ .Values.service.port }}
 
+{{- if eq .Values.database.driver "sqlite" }}
 The SQLite vault is persisted in the {{ include "mariner.fullname" . }} PVC.
+{{- else }}
+Mariner uses PostgreSQL through the configured database URL or Secret.
+{{- end }}
+The audit sidecar polls the database and forwards new canonical JSON events to
+stdout when enabled; no shared audit-log volume is required.

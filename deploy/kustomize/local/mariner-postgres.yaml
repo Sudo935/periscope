@@ -1,0 +1,57 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mariner-postgres-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mariner-db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mariner-db
+  template:
+    metadata:
+      labels:
+        app: mariner-db
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          env:
+            - name: POSTGRES_DB
+              value: mariner
+            - name: POSTGRES_USER
+              value: mariner
+            - name: POSTGRES_PASSWORD
+              value: MarinerPostgres123!
+          ports:
+            - name: postgres
+              containerPort: 5432
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: mariner-postgres-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariner-db
+spec:
+  selector:
+    app: mariner-db
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres

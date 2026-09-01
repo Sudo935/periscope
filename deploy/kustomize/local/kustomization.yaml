@@ -4,7 +4,6 @@ namespace: infra
 resources:
   - namespace.yaml
   - cert-manager.yaml
-  - postgres.yaml
   - keycloak-realm.yaml
   - keycloak.yaml
   - minio.yaml

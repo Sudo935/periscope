@@ -3,31 +3,29 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 
 	"mariner/internal/vault"
 )
 
-type Organization struct {
-	ID          string                            `json:"id"`
-	Name        string                            `json:"name"`
-	Groups      []string                          `json:"groups"`
-	Connections map[string]OrganizationConnection `json:"connections"`
-}
-type OrganizationConnection struct {
-	vault.Connection
-	AccessKeyEnv string `json:"accessKeyEnv"`
-	SecretKeyEnv string `json:"secretKeyEnv"`
-}
+type Organization = vault.Organization
+type OrganizationConnection = vault.OrganizationConnection
 
 type Config struct {
-	Addr, DataDir, OIDCIssuer, OIDCClientID, OIDCClientSecret, OIDCRedirectURL, CookieSecret, OIDCGroupsClaim, OIDCAudienceClaim, OIDCAudience, OIDCNameClaim string
-	OIDCDebugJWT                                                                                                                                              bool
-	Organizations                                                                                                                                             map[string]Organization
+	Addr, DataDir, DatabaseDriver, DatabaseURL, AuditAdminGroup, OrganizationEncryptionKey, OIDCIssuer, OIDCClientID, OIDCClientSecret, OIDCRedirectURL, CookieSecret, OIDCGroupsClaim, OIDCAudienceClaim, OIDCAudience, OIDCNameClaim string
+	AuditEnabled                                                                                                                                                                                                                       bool
+	OIDCDebugJWT                                                                                                                                                                                                                       bool
+	Organizations                                                                                                                                                                                                                      map[string]Organization
 }
 
 func Load() Config {
-	cfg := Config{Addr: value("ADDR", ":8080"), DataDir: value("DATA_DIR", "./data"), OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCClientID: os.Getenv("OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), OIDCRedirectURL: os.Getenv("OIDC_REDIRECT_URL"), CookieSecret: value("COOKIE_SECRET", "change-me-in-production"), OIDCGroupsClaim: value("OIDC_GROUPS_CLAIM", "groups"), OIDCAudienceClaim: value("OIDC_AUDIENCE_CLAIM", "aud"), OIDCAudience: value("OIDC_AUDIENCE", os.Getenv("OIDC_CLIENT_ID")), OIDCNameClaim: value("OIDC_NAME_CLAIM", "name"), OIDCDebugJWT: os.Getenv("OIDC_DEBUG_JWT") == "true"}
+	databaseDriver := value("DATABASE_DRIVER", "postgres")
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" && databaseDriver == "postgres" {
+		databaseURL = postgresURL()
+	}
+	cfg := Config{Addr: value("ADDR", ":8080"), DataDir: value("DATA_DIR", "./data"), DatabaseDriver: databaseDriver, DatabaseURL: databaseURL, AuditAdminGroup: value("AUDIT_ADMIN_GROUP", "admins"), OrganizationEncryptionKey: os.Getenv("MARINER_ORG_ENCRYPTION_KEY"), AuditEnabled: os.Getenv("AUDIT_ENABLED") != "false", OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCClientID: os.Getenv("OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), OIDCRedirectURL: os.Getenv("OIDC_REDIRECT_URL"), CookieSecret: value("COOKIE_SECRET", "change-me-in-production"), OIDCGroupsClaim: value("OIDC_GROUPS_CLAIM", "groups"), OIDCAudienceClaim: value("OIDC_AUDIENCE_CLAIM", "aud"), OIDCAudience: value("OIDC_AUDIENCE", os.Getenv("OIDC_CLIENT_ID")), OIDCNameClaim: value("OIDC_NAME_CLAIM", "name"), OIDCDebugJWT: os.Getenv("OIDC_DEBUG_JWT") == "true"}
 	if raw := os.Getenv("MARINER_ORGANIZATIONS_JSON"); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &cfg.Organizations); err != nil {
 			panic(fmt.Sprintf("invalid MARINER_ORGANIZATIONS_JSON: %v", err))
@@ -40,6 +38,7 @@ func Load() Config {
 		if organization.Name == "" {
 			organization.Name = orgName
 		}
+		organization.Provisioned = true
 		if len(organization.Groups) == 0 {
 			organization.Groups = []string{orgName}
 		}
@@ -64,9 +63,35 @@ func Load() Config {
 	return cfg
 }
 
+func postgresURL() string {
+	host := os.Getenv("DATABASE_HOST")
+	port := value("DATABASE_PORT", "5432")
+	database := os.Getenv("DATABASE_NAME")
+	username := os.Getenv("DATABASE_USERNAME")
+	password := os.Getenv("DATABASE_PASSWORD")
+	if host == "" || database == "" || username == "" || password == "" {
+		return ""
+	}
+	query := url.Values{}
+	if sslMode := os.Getenv("DATABASE_SSLMODE"); sslMode != "" {
+		query.Set("sslmode", sslMode)
+	}
+	return (&url.URL{Scheme: "postgres", Host: host + ":" + port, Path: "/" + database, User: url.UserPassword(username, password), RawQuery: query.Encode()}).String()
+}
+
 func value(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func valueInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		var parsed int
+		if _, err := fmt.Sscanf(v, "%d", &parsed); err == nil && parsed > 0 {
+			return parsed
+		}
 	}
 	return fallback
 }

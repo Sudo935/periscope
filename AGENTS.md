@@ -81,6 +81,19 @@ Keycloak users are realm-specific. The demo user is in the `mariner` realm, not 
 
 The Helm chart supports `oidc.groupsClaim`, `organizations`, and `extraObjects`. `oidc.groupsClaim` defaults to `groups` and controls which JWT claim is read; it may be any claim containing a string or string array. Organizations are a map keyed by organization name, and each organization's `connections` is a map keyed by connection name. Each entry declares a configurable ID, display name, matching claim values, and predefined connection details. Each connection references a Kubernetes Secret through `credentials.secretName`, `accessKeyKey`, and `secretKeyKey`; ExternalSecrets can be supplied through `extraObjects`. The chart injects credentials only into the backend pod and emits map-shaped organization metadata as `MARINER_ORGANIZATIONS_JSON`. Do not put raw S3 credentials in Helm values or ConfigMaps.
 
+## Database and audit
+
+The chart defaults to PostgreSQL. SQLite is available for lightweight
+single-replica use with `database.driver: sqlite`. PostgreSQL may use `DATABASE_URL` or the chart's
+field-based `database.existingSecret` selectors. Both backends use the same encrypted vault
+envelope schema and the same `audit_events.event_json` JSON content.
+
+Audit events are serialized once and stored identically in the selected
+database's `audit_events.event_json` column. The chart enables `audit.sidecar`
+by default; it runs a restricted database-polling sidecar that emits new event
+JSON to stdout for Alloy/Loki. Never include passwords,
+S3 credentials, JWTs, cookies, or object contents in audit events.
+
 ## Validation
 
 Verify all pods and certificates:

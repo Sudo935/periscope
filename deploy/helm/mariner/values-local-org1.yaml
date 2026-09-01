@@ -6,6 +6,19 @@ image:
   tag: local
   pullPolicy: Never
 
+persistence:
+  enabled: false
+
+database:
+  driver: postgres
+  existingSecret:
+    name: mariner-postgres
+    hostKey: host
+    portKey: port
+    databaseKey: database
+    usernameKey: username
+    passwordKey: password
+
 oidc:
   issuer: https://keycloak.127.0.0.1.sslip.io/realms/mariner
   clientId: mariner
