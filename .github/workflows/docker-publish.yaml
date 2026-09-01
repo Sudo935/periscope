@@ -226,6 +226,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo "$GH_TOKEN" | oras login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
           python3 <<'PY'
           import json
           import os
@@ -296,6 +297,19 @@ jobs:
           def fetch_manifest(reference):
               result = subprocess.run(
                   ["oras", "manifest", "fetch", reference],
+                  text=True,
+                  capture_output=True,
+              )
+              if result.returncode != 0:
+                  return None
+              try:
+                  return json.loads(result.stdout)
+              except json.JSONDecodeError:
+                  return None
+
+          def fetch_descriptor(reference):
+              result = subprocess.run(
+                  ["oras", "manifest", "fetch", "--descriptor", reference],
                   text=True,
                   capture_output=True,
               )
@@ -379,6 +393,15 @@ jobs:
                   continue
               walk_descriptor_graph(f"{image}:{tag}", "", visited)
               walk_referrers(f"{image}:{tag}", visited)
+
+          # Cosign versions may be stored using GHCR's legacy tag-based
+          # referrer format, which is not always returned by oras discover.
+          # Resolve those tags directly and retain their manifest versions.
+          for subject in list(keep_digests):
+              for suffix in ("sig", "att", "sbom", "intoto"):
+                  descriptor = fetch_descriptor(f"{image}:sha256-{subject}.{suffix}")
+                  if descriptor and descriptor.get("digest"):
+                      keep_digests.add(descriptor["digest"].removeprefix("sha256:"))
 
           for version in versions:
               digest = version.get("name", "").removeprefix("sha256:")
