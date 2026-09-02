@@ -274,7 +274,12 @@ jobs:
           # digest of their subject, for example sha256-<digest>.sig. Keep
           # those artifacts whenever the subject image is retained, even if
           # the registry's referrer index is eventually consistent.
-          artifact = re.compile(r"^sha256-([0-9a-f]{64})\.")
+          # GHCR's package API is not authoritative for OCI referrers: it can
+          # omit Cosign's legacy tag, or return it after the image version.
+          # Treat every digest-style artifact as protected.  In particular,
+          # never fall back to deleting an artifact through the package API.
+          artifact = re.compile(r"^sha256-([0-9a-f]{64})\..+$")
+          artifact_tag = re.compile(r"^sha256-[0-9a-f]{64}\.(?:sig|att|sbom|intoto)$")
 
           def tags(version):
               return set(version.get("metadata", {}).get("container", {}).get("tags", []) or [])
@@ -346,6 +351,21 @@ jobs:
                   if descriptor and descriptor.get("digest"):
                       descriptors.add(descriptor["digest"].removeprefix("sha256:"))
               return descriptors
+
+          def direct_artifact_tags():
+              """Return all legacy referrer tags visible directly in GHCR."""
+              result = subprocess.run(
+                  ["oras", "repo", "tags", image],
+                  text=True,
+                  capture_output=True,
+              )
+              if result.returncode != 0:
+                  raise RuntimeError(f"could not list tags for {image}")
+              return {
+                  tag.strip()
+                  for tag in result.stdout.splitlines()
+                  if artifact_tag.match(tag.strip())
+              }
 
           def walk_descriptor_graph(reference, digest, visited):
               digest = digest.removeprefix("sha256:")
@@ -430,6 +450,7 @@ jobs:
                   if descriptor and descriptor.get("digest"):
                       keep_digests.add(descriptor["digest"].removeprefix("sha256:"))
           keep_digests.update(legacy_artifact_descriptors(set(keep_digests)))
+          protected_artifact_tags = direct_artifact_tags()
 
           for version in versions:
               digest = version.get("name", "").removeprefix("sha256:")
@@ -441,16 +462,67 @@ jobs:
               if subjects & keep_digests:
                   keep_ids.add(version["id"])
 
-          deleted = 0
-          for version in versions:
-              if version["id"] in keep_ids:
-                  continue
-              result = gh(f"{base}/{version['id']}", method="DELETE")
-              if result.returncode != 0:
-                  raise RuntimeError(result.stderr or result.stdout)
-              deleted += 1
+          def delete_ref_with_oras(ref):
+              return subprocess.run(
+                  ["oras", "manifest", "delete", "--force", ref],
+                  text=True,
+                  capture_output=True,
+              )
 
-          print(f"Kept {len(keep_ids)} GHCR versions; deleted {deleted} stale versions")
+          # Delete in passes.  ORAS removes the tag/referrer relationship
+          # cleanly; the GitHub API is only a fallback for versions that have
+          # no registry reference.  Never API-delete an untagged or
+          # digest-artifact version because that is exactly how a signature
+          # can be removed while its image tag remains.
+          total_deleted = 0
+          deleted_ids = set()
+          for cleanup_pass in range(1, 6):
+              deleted_this_pass = 0
+              for version in versions:
+                  if version["id"] in keep_ids or version["id"] in deleted_ids:
+                      continue
+                  version_tags = tags(version)
+                  digest = version.get("name", "")
+                  if (
+                      not version_tags
+                      or version_tags.intersection(protected_artifact_tags)
+                      or any(artifact_tag.match(tag) for tag in version_tags)
+                  ):
+                      print(
+                          f"Preserving unclassified/artifact version {version['id']} "
+                          f"digest={digest} tags={','.join(sorted(version_tags)) or '<untagged>'}"
+                      )
+                      continue
+
+                  deleted = False
+                  for tag in sorted(version_tags):
+                      result = delete_ref_with_oras(f"{image}:{tag}")
+                      if result.returncode == 0:
+                          deleted = True
+                          break
+                  if not deleted and digest.startswith("sha256:"):
+                      result = delete_ref_with_oras(f"{image}@{digest}")
+                      deleted = result.returncode == 0
+                  if not deleted:
+                      result = gh(f"{base}/{version['id']}", method="DELETE")
+                      if result.returncode != 0:
+                          raise RuntimeError(result.stderr or result.stdout)
+                  deleted_ids.add(version["id"])
+                  deleted_this_pass += 1
+                  total_deleted += 1
+              print(f"cleanup pass {cleanup_pass}: deleted {deleted_this_pass}")
+              if deleted_this_pass == 0:
+                  break
+              time.sleep(2)
+
+          # A final direct registry check is intentionally informational.  It
+          # makes signature loss visible in the job log without deleting any
+          # additional artifact versions.
+          remaining_artifacts = direct_artifact_tags()
+          print(
+              f"Kept {len(keep_ids)} GHCR versions; deleted {total_deleted} stale versions; "
+              f"visible legacy artifacts after cleanup: {len(remaining_artifacts)}"
+          )
           PY
 
   verify-published-signature:
